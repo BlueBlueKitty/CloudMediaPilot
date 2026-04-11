@@ -3,6 +3,7 @@ from functools import lru_cache
 from app.adapters.c115 import C115Adapter
 from app.adapters.pansou import PanSouAdapter
 from app.adapters.prowlarr import ProwlarrAdapter
+from app.adapters.quark import QuarkAdapter
 from app.adapters.tmdb import TMDBAdapter
 from app.core.config import ProviderSettings, get_settings
 from app.services.app_config_service import AppConfigStore, build_provider_settings
@@ -14,7 +15,7 @@ from app.services.task_service import TaskService
 @lru_cache
 def get_app_config_store() -> AppConfigStore:
     settings = get_settings()
-    return AppConfigStore(settings.config_db_path)
+    return AppConfigStore(settings.config_env_path)
 
 
 def _provider_settings() -> ProviderSettings:
@@ -30,7 +31,7 @@ def get_search_service() -> SearchService:
 
 def get_task_service() -> TaskService:
     settings = _provider_settings()
-    return TaskService(C115Adapter(settings))
+    return TaskService(C115Adapter(settings), QuarkAdapter(settings), settings)
 
 
 def get_provider_status_service() -> ProviderStatusService:

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import re
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
 from app.core.config import ProviderSettings
 from app.core.errors import AuthError, ProviderError, ValidationError
-from app.schemas.models import PublicTaskState
+from app.schemas.models import C115DirItem, PublicTaskState
 
 
 class C115Adapter:
@@ -86,10 +88,27 @@ class C115Adapter:
                 400,
             )
 
+    @staticmethod
+    def _parse_share_link(source_uri: str) -> tuple[str, str]:
+        parsed = urlparse(source_uri)
+        code = ""
+        for pattern in (r"/s/([A-Za-z0-9]+)", r"share/([A-Za-z0-9]+)"):
+            match = re.search(pattern, parsed.path)
+            if match:
+                code = match.group(1)
+                break
+        if not code:
+            raise ValidationError("C115_INVALID_SHARE", "invalid 115 share link", 400)
+        qs = parse_qs(parsed.query or "")
+        receive = (
+            (qs.get("password") or qs.get("pwd") or qs.get("receive_code") or [""])[0]
+            .strip()
+        )
+        return code, receive
+
     async def create_offline_task(self, source_uri: str, target_dir_id: str) -> str:
         self._ensure_allowed("create_offline_task")
         self._validate_source(source_uri)
-
         if self.settings.use_mock:
             return self.make_idempotency_key(source_uri, target_dir_id)[:16]
 
@@ -171,7 +190,7 @@ class C115Adapter:
 
     async def check(self) -> tuple[bool, str]:
         if self.settings.use_mock:
-            return True, "mock"
+            return True, "mock_ok"
         if not self.settings.c115_cookie:
             return False, "missing_cookie"
         try:
@@ -198,3 +217,210 @@ class C115Adapter:
             return True, "ok"
         except Exception as exc:  # noqa: BLE001
             return False, str(exc)
+
+    def _parse_dir_items(self, rows: object) -> list[C115DirItem]:
+        out: list[C115DirItem] = []
+        if not isinstance(rows, list):
+            return out
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            ns = row.get("ns")
+            ns_int = 0
+            if isinstance(ns, int | float):
+                ns_int = int(ns)
+            elif isinstance(ns, str) and ns.isdigit():
+                ns_int = int(ns)
+            is_dir = bool(
+                row.get("is_dir")
+                or row.get("is_directory")
+                or ns_int > 0
+                or (row.get("fid") in {None, "", 0, "0"} and row.get("cid"))
+            )
+            cid = row.get("cid") or row.get("id") or row.get("fid") or row.get("file_id")
+            name = row.get("n") or row.get("name") or row.get("file_name")
+            if not is_dir or not cid:
+                continue
+            out.append(C115DirItem(id=str(cid), name=str(name or cid), is_dir=True))
+        return out
+
+    def _try_p115client_dirs(self, parent_id: str) -> tuple[str, list[C115DirItem]] | None:
+        try:
+            from p115client import P115Client
+
+            client = P115Client(self.settings.c115_cookie, check_for_relogin=False)
+            if hasattr(client, "fs_files"):
+                resp = client.fs_files({"cid": parent_id, "show_dir": 1, "offset": 0, "limit": 200})
+                data = resp if isinstance(resp, dict) else {}
+                path = data.get("path") or []
+                if isinstance(path, list) and path:
+                    parent_path = "/" + "/".join(
+                        str(x.get("name") or "")
+                        for x in path
+                        if isinstance(x, dict)
+                    ).strip("/")
+                else:
+                    parent_path = "/"
+                items = self._parse_dir_items(data.get("data") or data.get("files") or [])
+                return parent_path, items
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+
+    async def list_dirs(self, parent_id: str = "0") -> tuple[str, list[C115DirItem]]:
+        if self.settings.use_mock:
+            if parent_id == "0":
+                return "/", [
+                    C115DirItem(id="100", name="媒体"),
+                    C115DirItem(id="200", name="下载"),
+                ]
+            if parent_id == "100":
+                return "/媒体", [
+                    C115DirItem(id="101", name="movie"),
+                    C115DirItem(id="102", name="tv"),
+                ]
+            return "/下载", [C115DirItem(id="201", name="离线任务")]
+        if not self.settings.c115_cookie:
+            raise AuthError("C115_AUTH_INVALID", "missing 115 cookie", 401)
+
+        sdk_data = self._try_p115client_dirs(parent_id)
+        if sdk_data is not None:
+            return sdk_data
+
+        headers = {"Cookie": self.settings.c115_cookie}
+        params = {
+            "aid": 1,
+            "cid": parent_id,
+            "o": "user_ptime",
+            "asc": 1,
+            "offset": 0,
+            "limit": 200,
+            "show_dir": 1,
+            "type": 0,
+            "format": "json",
+            "star": 0,
+            "suffix": "",
+            "natsort": 0,
+            "snap": 0,
+            "record_open_time": 1,
+            "fc_mix": 0,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+                resp = await client.get(
+                    "https://webapi.115.com/files",
+                    params=params,
+                    headers=headers,
+                )
+            if resp.status_code == 401:
+                raise AuthError("C115_AUTH_INVALID", "115 cookie invalid or expired", 401)
+            data = self._json_or_error(resp)
+            if data.get("state") is False and data.get("errno") in {99, 911, 20004}:
+                raise AuthError("C115_AUTH_INVALID", "115 cookie invalid or expired", 401)
+            path_items = data.get("path") or []
+            if isinstance(path_items, list) and path_items:
+                parent_path = "/" + "/".join(
+                    str(x.get("name") or "")
+                    for x in path_items
+                    if isinstance(x, dict)
+                ).strip("/")
+            else:
+                parent_path = "/"
+            items = self._parse_dir_items(data.get("data") or data.get("files") or [])
+            return parent_path, items
+        except AuthError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderError("C115_UPSTREAM_ERROR", f"115 list dirs failed: {exc}", 502) from exc
+
+    async def list_share_items(self, source_uri: str, parent_id: str = "") -> list[dict]:
+        share_code, receive_code = self._parse_share_link(source_uri)
+        if self.settings.use_mock:
+            if parent_id == "m-folder":
+                return [
+                    {"id": "m1", "name": "电影A.mkv", "size": 12 * 1024 * 1024 * 1024, "is_dir": False},
+                    {"id": "m2", "name": "字幕.ass", "size": 128 * 1024, "is_dir": False},
+                ]
+            return [{"id": "m-folder", "name": "电影合集", "size": None, "is_dir": True}]
+        if not self.settings.c115_cookie:
+            raise AuthError("C115_AUTH_INVALID", "missing 115 cookie", 401)
+        headers = {"Cookie": self.settings.c115_cookie}
+        try:
+            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+                resp = await client.get(
+                    "https://webapi.115.com/share/snap",
+                    params={
+                        "share_code": share_code,
+                        "receive_code": receive_code,
+                        "offset": 0,
+                        "limit": 100,
+                        "cid": parent_id or "",
+                    },
+                    headers=headers,
+                )
+            resp.raise_for_status()
+            data = self._json_or_error(resp)
+            rows = ((data.get("data") or {}).get("list") if isinstance(data, dict) else None) or []
+            out: list[dict] = []
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    ns = row.get("ns")
+                    ns_int = int(ns) if isinstance(ns, int | float) or (isinstance(ns, str) and ns.isdigit()) else 0
+                    is_dir = bool(ns_int > 0 or row.get("is_dir") or row.get("is_directory"))
+                    fid = str((row.get("cid") if is_dir else row.get("fid")) or row.get("cid") or "").strip()
+                    name = str(row.get("n") or row.get("name") or "").strip()
+                    if not fid or not name:
+                        continue
+                    size_raw = row.get("s")
+                    size = int(size_raw) if isinstance(size_raw, int | float) else None
+                    out.append({"id": fid, "name": name, "size": size, "is_dir": is_dir})
+            return out
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderError("C115_UPSTREAM_ERROR", f"115 list share items failed: {exc}", 502) from exc
+
+    async def save_share_items(
+        self, source_uri: str, target_dir_id: str, selected_ids: list[str]
+    ) -> str:
+        share_code, receive_code = self._parse_share_link(source_uri)
+        if self.settings.use_mock:
+            return self.make_idempotency_key(source_uri, target_dir_id)[:16]
+        if not self.settings.c115_cookie:
+            raise AuthError("C115_AUTH_INVALID", "missing 115 cookie", 401)
+        ids = selected_ids or [row["id"] for row in await self.list_share_items(source_uri)]
+        if not ids:
+            raise ValidationError("C115_SHARE_EMPTY", "分享内容为空", 400)
+        headers = {
+            "Cookie": self.settings.c115_cookie,
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        last_task = ""
+        try:
+            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+                for fid in ids:
+                    payload = {
+                        "cid": target_dir_id or "0",
+                        "share_code": share_code,
+                        "receive_code": receive_code,
+                        "file_id": fid,
+                    }
+                    resp = await client.post(
+                        "https://webapi.115.com/share/receive",
+                        headers=headers,
+                        data=payload,
+                    )
+                    resp.raise_for_status()
+                    body = self._json_or_error(resp)
+                    if body.get("state") is False:
+                        raise ProviderError(
+                            "C115_UPSTREAM_ERROR",
+                            str(body.get("error") or body.get("error_msg") or "save share failed"),
+                            502,
+                        )
+                    last_task = str(body.get("id") or body.get("task_id") or fid)
+            return last_task or self.make_idempotency_key(source_uri, target_dir_id)[:16]
+        except (ProviderError, ValidationError, AuthError):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderError("C115_UPSTREAM_ERROR", f"115 save share failed: {exc}", 502) from exc

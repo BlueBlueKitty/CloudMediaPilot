@@ -14,10 +14,15 @@ def _reset_runtime_config_db() -> None:
 
 
 def _prepare_config_db(monkeypatch, tmp_path: Path) -> None:
-    db_path = tmp_path / "config-test.db"
-    monkeypatch.setenv("CMP_CONFIG_DB_PATH", str(db_path))
+    env_path = tmp_path / "config" / ".env"
+    monkeypatch.setenv("CONFIG_ENV_PATH", str(env_path))
     monkeypatch.setenv("CMP_USE_MOCK", "true")
     _reset_runtime_config_db()
+
+
+def _login() -> None:
+    r = client.post("/auth/login", json={"username": "admin", "password": "admin"})
+    assert r.status_code == 200
 
 
 def test_health_ready() -> None:
@@ -27,6 +32,7 @@ def test_health_ready() -> None:
 
 def test_tmdb_search_resources_and_task_roundtrip(monkeypatch, tmp_path) -> None:
     _prepare_config_db(monkeypatch, tmp_path)
+    _login()
 
     tm = client.get("/tmdb/search", params={"query": "fight club", "limit": 5})
     assert tm.status_code == 200
@@ -58,6 +64,7 @@ def test_tmdb_search_resources_and_task_roundtrip(monkeypatch, tmp_path) -> None
 
 def test_idempotency_replay(monkeypatch, tmp_path) -> None:
     _prepare_config_db(monkeypatch, tmp_path)
+    _login()
 
     payload = {"source_uri": "magnet:?xt=urn:btih:SAME", "target_dir_id": "0"}
     r1 = client.post("/tasks/offline", json=payload)
@@ -69,6 +76,7 @@ def test_idempotency_replay(monkeypatch, tmp_path) -> None:
 
 def test_offline_task_uses_default_target_dir_from_settings(monkeypatch, tmp_path) -> None:
     _prepare_config_db(monkeypatch, tmp_path)
+    _login()
     client.put("/settings", json={"c115_target_dir_id": "12345"})
 
     source_uri = "magnet:?xt=urn:btih:DEFAULT-DIR"
@@ -90,8 +98,37 @@ def test_offline_task_uses_default_target_dir_from_settings(monkeypatch, tmp_pat
     assert r2.json()["existing_task"] is True
 
 
+def test_transfer_share_items_can_be_browsed_recursively(monkeypatch, tmp_path) -> None:
+    _prepare_config_db(monkeypatch, tmp_path)
+    _login()
+
+    source_uri = "https://115.com/s/mockcode?password=abcd"
+    root = client.post(
+        "/transfer/prepare",
+        json={"source_uri": source_uri, "cloud_type": "115"},
+    )
+    assert root.status_code == 200
+    root_items = root.json()["items"]
+    assert root_items
+    assert root_items[0]["is_dir"] is True
+
+    child = client.post(
+        "/transfer/items",
+        json={
+            "source_uri": source_uri,
+            "cloud_type": "115",
+            "parent_id": root_items[0]["id"],
+        },
+    )
+    assert child.status_code == 200
+    child_items = child.json()["items"]
+    assert child_items
+    assert all(item["is_dir"] is False for item in child_items)
+
+
 def test_settings_masked_and_update(monkeypatch, tmp_path) -> None:
     _prepare_config_db(monkeypatch, tmp_path)
+    _login()
 
     g1 = client.get("/settings")
     assert g1.status_code == 200
@@ -123,4 +160,4 @@ def test_settings_masked_and_update(monkeypatch, tmp_path) -> None:
 
     test = client.post("/settings/test", json={"provider": "all"})
     assert test.status_code == 200
-    assert len(test.json()["results"]) == 4
+    assert len(test.json()["results"]) == 7

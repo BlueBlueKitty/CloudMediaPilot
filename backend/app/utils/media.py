@@ -34,8 +34,12 @@ def infer_cloud_type(link: str, magnet: str | None = None) -> str:
         return "aliyun"
     if "pan.quark.cn" in netloc:
         return "quark"
+    if "cloud.189.cn" in netloc:
+        return "tianyi"
     if "drive.uc.cn" in netloc or "pan.uc.cn" in netloc:
         return "uc"
+    if "123684.com" in netloc or "123865.com" in netloc or "123pan.com" in netloc:
+        return "123"
     if "115.com" in netloc:
         return "115"
     if "mypikpak.com" in netloc or "pikpak" in netloc:

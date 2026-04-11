@@ -5,11 +5,16 @@ services:
       dockerfile: backend/Dockerfile
     container_name: cloudmediapilot-backend
     env_file:
-      - .env
+      - ./config/.env
+    environment:
+      CONFIG_ENV_PATH: /app/config/.env
+      SYSTEM_USERNAME: ${SYSTEM_USERNAME:-admin}
+      SYSTEM_PASSWORD: ${SYSTEM_PASSWORD:-admin}
     ports:
       - "8000:8000"
     volumes:
       - ./data:/app/data
+      - ./config:/app/config
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 20s

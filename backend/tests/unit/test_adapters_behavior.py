@@ -11,22 +11,46 @@ from app.services.search_service import SearchService
 
 def _settings() -> ProviderSettings:
     return ProviderSettings(
-        use_mock=False,
-        request_timeout_seconds=10,
         pansou_base_url="http://localhost:805",
         enable_pansou=True,
+        pansou_use_proxy=False,
+        pansou_enable_auth=False,
+        pansou_username="",
+        pansou_password="",
+        pansou_search_path="/api/search",
+        pansou_search_method="POST",
+        pansou_cloud_types="",
+        pansou_source="all",
         prowlarr_base_url="http://localhost:9696",
         prowlarr_api_key="key",
+        prowlarr_use_proxy=False,
         enable_prowlarr=True,
         tmdb_base_url="https://api.themoviedb.org/3",
         tmdb_api_key="key",
         enable_tmdb=True,
+        tmdb_image_base_url="https://image.tmdb.org/t/p/w500",
+        tmdb_use_proxy=False,
         c115_base_url="https://lixian.115.com",
         c115_cookie="",
         c115_allowed_actions="create_offline_task",
         c115_target_dir_id="0",
+        c115_target_dir_path="/",
+        c115_offline_dir_id="0",
+        c115_offline_dir_path="/",
         c115_offline_add_path="/lixianssp/?ac=add_task_url",
         c115_offline_list_path="/web/lixian/?ac=task_lists",
+        storage_providers="115,quark,tianyi,123",
+        quark_cookie="",
+        tianyi_username="",
+        tianyi_password="",
+        pan123_username="",
+        pan123_password="",
+        system_username="admin",
+        system_password_hash="",
+        system_auth_secret="secret",
+        system_proxy_url="",
+        system_proxy_enabled=False,
+        request_timeout_seconds=10,
     )
 
 
@@ -81,7 +105,7 @@ async def test_tmdb_search_supports_multi_page(monkeypatch: pytest.MonkeyPatch) 
                 }
             )
 
-    monkeypatch.setattr("app.adapters.tmdb.httpx.AsyncClient", lambda timeout: _Client())
+    monkeypatch.setattr("app.adapters.tmdb.httpx.AsyncClient", lambda **kwargs: _Client())
     out = await TMDBAdapter(_settings()).search("test", 30)
     assert len(out) == 30
     assert calls == [1, 2]
@@ -111,7 +135,7 @@ async def test_prowlarr_parses_dict_results(monkeypatch: pytest.MonkeyPatch) -> 
                 }
             )
 
-    monkeypatch.setattr("app.adapters.prowlarr.httpx.AsyncClient", lambda timeout: _Client())
+    monkeypatch.setattr("app.adapters.prowlarr.httpx.AsyncClient", lambda **kwargs: _Client())
     out = await ProwlarrAdapter(_settings()).search("test", 50)
     assert len(out) == 3
     assert [row.source_id for row in out] == ["g1", "g2", "g3"]
@@ -126,7 +150,7 @@ async def test_pansou_parses_wrapped_data_rows(monkeypatch: pytest.MonkeyPatch) 
         async def __aexit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
             return None
 
-        async def post(self, _url, json=None):  # type: ignore[no-untyped-def]
+        async def post(self, _url, json=None, headers=None):  # type: ignore[no-untyped-def]
             return _Resp(
                 {
                     "code": 0,
@@ -144,7 +168,7 @@ async def test_pansou_parses_wrapped_data_rows(monkeypatch: pytest.MonkeyPatch) 
                 }
             )
 
-    monkeypatch.setattr("app.adapters.pansou.httpx.AsyncClient", lambda timeout: _Client())
+    monkeypatch.setattr("app.adapters.pansou.httpx.AsyncClient", lambda **kwargs: _Client())
     out = await PanSouAdapter(_settings()).search("test", 20)
     assert len(out) == 3
     assert out[1].magnet and out[1].magnet.startswith("magnet:")

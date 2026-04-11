@@ -26,8 +26,9 @@ class SearchService:
     ) -> SearchResponse:
         started = time.perf_counter()
         partial_success = False
+        warnings: list[str] = []
 
-        source_limit = max(limit * 3, 100)
+        source_limit = max(limit * 2, 500)
         pansou_task = asyncio.create_task(self.pansou.search(keyword, source_limit))
         prowlarr_task = asyncio.create_task(self.prowlarr.search(keyword, source_limit))
 
@@ -41,8 +42,9 @@ class SearchService:
                     pansou_results = out
                 else:
                     prowlarr_results = out
-            except ProviderError:
+            except ProviderError as exc:
                 partial_success = True
+                warnings.append(f"{task_name}:{exc.message}")
 
         merged = self._dedupe(pansou_results + prowlarr_results)
         if tmdb_context:
@@ -67,6 +69,7 @@ class SearchService:
             took_ms=elapsed,
             total=len(merged),
             partial_success=partial_success,
+            warnings=warnings,
             results=merged,
         )
 
@@ -75,7 +78,13 @@ class SearchService:
         seen: set[str] = set()
         out: list[SearchResultItem] = []
         for row in items:
-            key = row.magnet or row.link or f"{row.source}:{row.source_id}"
+            uri = (row.magnet or row.link or "").strip()
+            if uri:
+                key = uri.lower()
+            elif row.source_id:
+                key = f"{row.source}:{row.source_id}"
+            else:
+                key = f"{row.source}:{row.title}"
             if key in seen:
                 continue
             seen.add(key)

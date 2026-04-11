@@ -6,6 +6,11 @@ import sys
 
 from fastapi.testclient import TestClient
 
+if not os.getenv("CONFIG_ENV_PATH"):
+    os.environ["CONFIG_ENV_PATH"] = "/tmp/cmp-smoke/.env"
+os.environ.setdefault("SYSTEM_USERNAME", "admin")
+os.environ.setdefault("SYSTEM_PASSWORD", "admin")
+
 sys.path.insert(0, os.path.abspath("backend"))
 from app.core.config import get_settings  # noqa: E402
 from app.main import app  # noqa: E402
@@ -16,9 +21,17 @@ def must(cond: bool, msg: str) -> None:
         raise SystemExit(f"[FAIL] {msg}")
 
 
+def login(client: TestClient) -> None:
+    username = os.getenv("SYSTEM_USERNAME", "admin")
+    password = os.getenv("SYSTEM_PASSWORD", "admin")
+    r = client.post("/auth/login", json={"username": username, "password": password})
+    must(r.status_code == 200, "login")
+
+
 def run_mock(client: TestClient) -> None:
     must(client.get("/health").status_code == 200, "health")
     must(client.get("/ready").status_code == 200, "ready")
+    login(client)
     s = client.post("/search", json={"keyword": "test", "limit": 5})
     must(s.status_code == 200, "search")
     t = client.post(
@@ -32,6 +45,7 @@ def run_mock(client: TestClient) -> None:
 
 def run_connectivity(client: TestClient) -> None:
     must(client.get("/health").status_code == 200, "health")
+    login(client)
     r = client.get("/providers/status")
     must(r.status_code == 200, "providers status")
     providers = r.json().get("providers", [])
@@ -42,8 +56,7 @@ def run_connectivity(client: TestClient) -> None:
 
 def run_action(client: TestClient) -> None:
     settings = get_settings()
-    if not settings.c115_cookie:
-        raise SystemExit("[FAIL] missing CMP_C115_COOKIE for smoke-real-action")
+    login(client)
 
     source_uri = os.getenv(
         "CMP_SMOKE_SOURCE_URI",

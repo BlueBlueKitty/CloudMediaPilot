@@ -3,6 +3,9 @@ key.txt
 .env
 .env.*
 !.env.example
+config/.env
+config/*.local
+!config/.env.example
 
 # OMX runtime state/logs
 .omx/logs/
@@ -19,6 +22,17 @@ __pycache__/
 # Local runtime data
 data/
 backend/tests/.tmp/
+
+# JS deps / artifacts
+node_modules/
+package-lock.json
+npm-debug.log*
+
+# Playwright artifacts
+playwright-report/
+test-results/
+*.png
+*.log
 
 AGENTS.md
 ref_repos/

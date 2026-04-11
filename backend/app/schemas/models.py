@@ -47,9 +47,12 @@ class SearchResultItem(BaseModel):
         "baidu",
         "aliyun",
         "quark",
+        "tianyi",
+        "123",
         "uc",
         "115",
         "pikpak",
+        "mobile",
         "xunlei",
         "ed2k",
         "other",
@@ -67,6 +70,7 @@ class SearchResponse(BaseModel):
     took_ms: int
     total: int
     partial_success: bool = False
+    warnings: list[str] = Field(default_factory=list)
     results: list[SearchResultItem]
 
 
@@ -78,6 +82,9 @@ class TMDBSearchItem(BaseModel):
     rating: float | None = None
     overview: str = ""
     poster_url: str | None = None
+    country: str | None = None
+    language: str | None = None
+    episodes: int | None = None
 
 
 class TMDBSearchResponse(BaseModel):
@@ -92,11 +99,65 @@ class OfflineTaskRequest(BaseModel):
     target_dir_id: str | None = None
 
 
+class OfflineTaskCheckRequest(BaseModel):
+    source_uri: str = Field(min_length=1)
+    cloud_type: str | None = None
+
+
+class OfflineTaskCheckResponse(BaseModel):
+    provider: str
+    supported: bool
+    configured: bool
+    message: str
+    default_dir_id: str | None = None
+    default_dir_path: str | None = None
+
+
 class OfflineTaskResponse(BaseModel):
     request_id: str
     task_id: str
     existing_task: bool
     status: PublicTaskState
+
+
+class TransferPrepareRequest(BaseModel):
+    source_uri: str = Field(min_length=1)
+    cloud_type: str | None = None
+
+
+class TransferItemsRequest(BaseModel):
+    source_uri: str = Field(min_length=1)
+    cloud_type: str | None = None
+    parent_id: str = ""
+
+
+class TransferItem(BaseModel):
+    id: str
+    name: str
+    size: int | None = None
+    is_dir: bool = False
+
+
+class TransferPrepareResponse(BaseModel):
+    provider: str
+    title: str
+    selectable: bool = False
+    items: list[TransferItem] = Field(default_factory=list)
+    default_dir_id: str | None = None
+    default_dir_path: str | None = None
+
+
+class TransferCommitRequest(BaseModel):
+    source_uri: str = Field(min_length=1)
+    target_dir_id: str = Field(min_length=1)
+    selected_ids: list[str] = Field(default_factory=list)
+    cloud_type: str | None = None
+
+
+class TransferCommitResponse(BaseModel):
+    request_id: str
+    task_id: str
+    provider: str
 
 
 class TaskStatusResponse(BaseModel):
@@ -137,14 +198,26 @@ class ProviderStatusResponse(BaseModel):
 
 class SettingsResponse(BaseModel):
     tmdb_base_url: str
+    tmdb_image_base_url: str
+    tmdb_use_proxy: bool
     tmdb_api_key_masked: str
     has_tmdb_api_key: bool
 
     prowlarr_base_url: str
+    prowlarr_use_proxy: bool
     prowlarr_api_key_masked: str
     has_prowlarr_api_key: bool
 
     pansou_base_url: str
+    pansou_use_proxy: bool
+    pansou_enable_auth: bool
+    pansou_username: str
+    pansou_search_path: str
+    pansou_search_method: str
+    pansou_cloud_types: str
+    pansou_source: str
+    pansou_password_masked: str
+    has_pansou_password: bool
     enable_tmdb: bool
     enable_prowlarr: bool
     enable_pansou: bool
@@ -154,18 +227,44 @@ class SettingsResponse(BaseModel):
     has_c115_cookie: bool
     c115_allowed_actions: str
     c115_target_dir_id: str
+    c115_target_dir_path: str
+    c115_offline_dir_id: str
+    c115_offline_dir_path: str
     c115_offline_add_path: str
     c115_offline_list_path: str
+    storage_providers: str
+    quark_cookie_masked: str
+    tianyi_username: str
+    tianyi_password_masked: str
+    pan123_username: str
+    pan123_password_masked: str
+
+    system_username: str
+    system_proxy_url: str
+    system_proxy_enabled: bool
+    system_password_masked: str
+    has_system_password: bool
 
 
 class SettingsUpdateRequest(BaseModel):
     tmdb_base_url: str | None = None
+    tmdb_image_base_url: str | None = None
+    tmdb_use_proxy: bool | None = None
     tmdb_api_key: str | None = None
 
     prowlarr_base_url: str | None = None
     prowlarr_api_key: str | None = None
+    prowlarr_use_proxy: bool | None = None
 
     pansou_base_url: str | None = None
+    pansou_use_proxy: bool | None = None
+    pansou_enable_auth: bool | None = None
+    pansou_username: str | None = None
+    pansou_password: str | None = None
+    pansou_search_path: str | None = None
+    pansou_search_method: str | None = None
+    pansou_cloud_types: str | None = None
+    pansou_source: str | None = None
     enable_tmdb: bool | None = None
     enable_prowlarr: bool | None = None
     enable_pansou: bool | None = None
@@ -174,12 +273,36 @@ class SettingsUpdateRequest(BaseModel):
     c115_cookie: str | None = None
     c115_allowed_actions: str | None = None
     c115_target_dir_id: str | None = None
+    c115_target_dir_path: str | None = None
+    c115_offline_dir_id: str | None = None
+    c115_offline_dir_path: str | None = None
     c115_offline_add_path: str | None = None
     c115_offline_list_path: str | None = None
+    storage_providers: str | None = None
+    quark_cookie: str | None = None
+    tianyi_username: str | None = None
+    tianyi_password: str | None = None
+    pan123_username: str | None = None
+    pan123_password: str | None = None
+
+    system_username: str | None = None
+    system_proxy_url: str | None = None
+    system_proxy_enabled: bool | None = None
+    system_password: str | None = None
 
 
 class ConnectionTestRequest(BaseModel):
-    provider: Literal["tmdb", "prowlarr", "pansou", "c115", "all"] = "all"
+    provider: Literal[
+        "tmdb",
+        "prowlarr",
+        "pansou",
+        "c115",
+        "quark",
+        "tianyi",
+        "pan123",
+        "proxy",
+        "all",
+    ] = "all"
 
 
 class ConnectionTestResult(BaseModel):
@@ -200,3 +323,26 @@ class HealthResponse(BaseModel):
 class ReadyResponse(BaseModel):
     status: Literal["ready"] = "ready"
     checks: dict[str, bool]
+
+
+class AuthLoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class AuthUserResponse(BaseModel):
+    authenticated: bool
+    username: str | None = None
+
+
+class C115DirItem(BaseModel):
+    id: str
+    name: str
+    is_dir: bool = True
+
+
+class C115DirListResponse(BaseModel):
+    request_id: str
+    parent_id: str
+    parent_path: str
+    items: list[C115DirItem]

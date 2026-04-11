@@ -2,7 +2,7 @@ from app.schemas.models import SearchResultItem
 from app.services.search_service import SearchService
 
 
-def test_dedupe_uses_magnet_or_link() -> None:
+def test_dedupe_prefers_link_or_magnet() -> None:
     rows = [
         SearchResultItem(
             source="pansou", source_id="1", title="a", link="l1", magnet="m1", score=8

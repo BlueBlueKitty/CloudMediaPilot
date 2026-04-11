@@ -4,149 +4,300 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>CloudMediaPilot</title>
-    <link rel="stylesheet" href="/assets/app.css" />
+    <link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
+    <link rel="stylesheet" href="/assets/app.css?v=20260412-5" />
   </head>
   <body>
-    <div class="app-shell">
+    <div class="layout">
       <aside class="sidebar">
-        <div class="brand">CloudMediaPilot</div>
-        <nav id="nav" class="nav"></nav>
+        <div class="brand-wrap">
+          <div class="brand"><img src="/assets/logo.svg" alt="logo" class="brand-logo" /><span>CloudMediaPilot</span></div>
+          <div class="sub">资源搜索转存助手</div>
+        </div>
+        <nav id="nav" class="nav">
+          <button data-page="recommend" class="active">推荐</button>
+          <button data-page="search">搜索</button>
+          <button data-page="settings">设置</button>
+        </nav>
       </aside>
 
-      <main class="content">
+      <main class="main">
         <section id="status" class="status" hidden></section>
+        <section id="transferToast" class="transfer-toast" hidden></section>
 
         <section data-page="recommend" class="page">
-          <h1>推荐</h1>
-          <form id="recommendForm" class="panel form-inline">
-            <input id="recommendQuery" placeholder="搜索 TMDB 影视资源" />
-            <button type="submit">搜索</button>
-            <button type="button" id="loadTrending">热门推荐</button>
-          </form>
-          <div id="recommendGrid" class="poster-grid"></div>
+          <div class="hero card">
+            <h1>推荐</h1>
+            <p>可在 TMDB / 豆瓣间切换分类，展示当前分类全部内容。</p>
+            <div class="recommend-top">
+              <input id="recommendQuery" placeholder="推荐页搜索（仅TMDB）" />
+              <button id="recommendSearchBtn" class="btn-primary">搜索</button>
+              <div class="image-mode">
+                <span>图片</span>
+                <label><input type="radio" name="imgMode" value="proxy" />代理</label>
+                <label><input type="radio" name="imgMode" value="direct" checked />直连</label>
+              </div>
+            </div>
+            <div class="recommend-panel">
+              <div id="recommendSourceTabs" class="source-tabs source-tabs-embedded">
+                <button class="active" data-source="tmdb">TMDB</button>
+                <button data-source="douban">豆瓣</button>
+              </div>
+              <div class="recommend-controls">
+                <label>分类
+                  <select id="recommendCategory"></select>
+                </label>
+                <button id="refreshRecommendBtn" type="button">刷新</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card section-title" id="recommendSectionTitle">推荐结果</div>
+          <div id="recommendGrid" class="recommend-grid"></div>
         </section>
 
         <section data-page="search" class="page" hidden>
-          <h1>搜索</h1>
-          <form id="resourceForm" class="panel form-inline">
-            <input id="resourceKeyword" placeholder="输入资源关键词" required />
-            <input id="resourceTargetDirId" placeholder="离线目录ID（留空使用默认目录）" />
-            <label class="inline-check">
-              <input id="useTmdbPrecision" type="checkbox" checked />
-              使用 TMDB 精准筛选
-            </label>
-            <button type="submit">搜索资源</button>
-          </form>
-
-          <div id="tmdbContextBox" class="panel context-box" hidden></div>
-
-          <div class="panel filters">
-            <label>来源
-              <select id="filterSource">
-                <option value="all">全部</option>
-                <option value="pansou">PanSou</option>
-                <option value="prowlarr">Prowlarr</option>
-              </select>
-            </label>
-            <label>网盘类型
-              <select id="filterCloudType">
-                <option value="all">全部</option>
-                <option value="magnet">磁力</option>
-                <option value="baidu">百度</option>
-                <option value="aliyun">阿里云盘</option>
-                <option value="quark">夸克</option>
-                <option value="uc">UC</option>
-                <option value="115">115</option>
-                <option value="pikpak">PikPak</option>
-                <option value="xunlei">迅雷</option>
-                <option value="ed2k">电驴</option>
-                <option value="other">其他</option>
-              </select>
-            </label>
-            <label>关键词
-              <input id="filterKeyword" placeholder="过滤标题" />
-            </label>
+          <div class="card search-head">
+            <h1 id="searchHeading">搜索</h1>
+            <p>聚合 PanSou 与 Prowlarr 资源结果，可直接转存到对应网盘。</p>
+            <div class="search-bar">
+              <input id="resourceKeyword" placeholder="输入关键词搜索资源" />
+              <button id="resourceSearchBtn" class="btn-primary">搜索</button>
+            </div>
+            <div id="sourceTabs" class="tabs">
+              <button data-source="all" class="active">全部</button>
+              <button data-source="prowlarr">Prowlarr</button>
+              <button data-source="pansou">PanSou</button>
+            </div>
+            <div class="search-tools">
+              <label>网盘类型
+                <select id="cloudTypeFilter">
+                  <option value="all">全部</option>
+                  <option value="magnet">磁力</option>
+                  <option value="quark">夸克</option>
+                  <option value="tianyi">天翼</option>
+                  <option value="123">123</option>
+                  <option value="115">115</option>
+                  <option value="other">其他</option>
+                </select>
+              </label>
+              <label>排序
+                <select id="sortBy">
+                  <option value="score_desc">相关度</option>
+                  <option value="size_desc">体积从大到小</option>
+                  <option value="size_asc">体积从小到大</option>
+                  <option value="time_desc">时间最新</option>
+                  <option value="time_asc">时间最旧</option>
+                </select>
+              </label>
+              <div id="resultViewTabs" class="tabs">
+                <button class="active" data-view="list">列表</button>
+                <button data-view="poster">海报卡片</button>
+              </div>
+            </div>
           </div>
 
-          <div class="panel table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>标题</th>
-                  <th>来源</th>
-                  <th>网盘类型</th>
-                  <th>大小</th>
-                  <th>时间</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody id="resultBody"></tbody>
-            </table>
-          </div>
-
-          <div class="panel">
-            <button id="refreshTasks" type="button">刷新离线任务</button>
-          </div>
-          <div class="panel table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>任务ID</th>
-                  <th>状态</th>
-                  <th>来源</th>
-                  <th>目录ID</th>
-                  <th>时间</th>
-                </tr>
-              </thead>
-              <tbody id="taskBody"></tbody>
-            </table>
+          <div id="resultSummary" class="result-summary-grid"></div>
+          <div id="resourceList" class="resource-list"></div>
+          <div class="list-actions">
+            <button id="loadMoreBtn" hidden>加载更多</button>
           </div>
         </section>
 
         <section data-page="settings" class="page" hidden>
-          <h1>设置</h1>
-          <form id="settingsForm" class="panel settings-grid">
-            <h3>TMDB</h3>
-            <label class="inline-check">
-              <input id="enableTmdb" type="checkbox" />
-              启用 TMDB
-            </label>
-            <label>TMDB Base URL<input id="tmdbBaseUrl" /></label>
-            <label>TMDB API Key<input id="tmdbApiKey" type="password" placeholder="留空=保持不变" /></label>
-
-            <h3>Prowlarr</h3>
-            <label class="inline-check">
-              <input id="enableProwlarr" type="checkbox" />
-              启用 Prowlarr
-            </label>
-            <label>Prowlarr Base URL<input id="prowlarrBaseUrl" /></label>
-            <label>Prowlarr API Key<input id="prowlarrApiKey" type="password" placeholder="留空=保持不变" /></label>
-
-            <h3>PanSou</h3>
-            <label class="inline-check">
-              <input id="enablePansou" type="checkbox" />
-              启用 PanSou
-            </label>
-            <label>PanSou Base URL<input id="pansouBaseUrl" /></label>
-
-            <h3>115</h3>
-            <label>115 Base URL<input id="c115BaseUrl" required /></label>
-            <label>115 Cookie<textarea id="c115Cookie" rows="3" placeholder="留空=保持不变"></textarea></label>
-            <label>115 默认目标目录 ID<input id="c115TargetDirId" /></label>
-            <label>允许动作（逗号分隔）<input id="c115AllowedActions" /></label>
-            <label>离线新增路径<input id="c115OfflineAddPath" /></label>
-            <label>离线列表路径<input id="c115OfflineListPath" /></label>
-
-            <div class="actions">
-              <button type="submit">保存设置</button>
-              <button id="testConnections" type="button">测试连接</button>
+          <div class="card settings-head">
+            <div>
+              <h1>系统设置</h1>
+              <p>保存后写入 config/.env。</p>
             </div>
+            <div class="settings-actions">
+              <button id="saveSettingsTop" class="btn-primary">保存设置</button>
+            </div>
+          </div>
+
+          <div id="settingsTabs" class="tabs">
+            <button data-tab="media" class="active">媒体配置</button>
+            <button data-tab="storage">网盘设置</button>
+            <button data-tab="search">资源搜索</button>
+            <button data-tab="system">系统配置</button>
+          </div>
+
+          <form id="settingsForm">
+            <section data-tab-pane="media" class="form-pane">
+              <article class="card form-card provider-card">
+                <div class="card-title-row">
+                  <h3>TMDB 配置</h3>
+                  <button type="button" class="btn-test-provider" data-provider="tmdb">测试</button>
+                </div>
+                <div class="form-grid">
+                  <label><span>API 地址</span><input id="tmdbBaseUrl" /></label>
+                  <label><span>图片接口</span><input id="tmdbImageBaseUrl" /></label>
+                  <label class="password-field">
+                    <span>API Key</span>
+                    <div class="password-wrap">
+                      <input id="tmdbApiKey" type="password" placeholder="留空=保持不变" />
+                      <button type="button" class="btn-eye" data-toggle-target="tmdbApiKey">👁</button>
+                    </div>
+                    <small id="tmdbApiKeyHint" class="hint"></small>
+                  </label>
+                  <label class="inline-toggles"><span>使用代理</span><div class="toggle-pack"><input id="tmdbUseProxy" type="checkbox" class="toggle" /></div></label>
+                </div>
+                <small id="testResult-tmdb" class="test-result"></small>
+              </article>
+            </section>
+
+            <section data-tab-pane="storage" class="form-pane" hidden>
+              <article class="card form-card provider-card">
+                <div class="card-title-row">
+                  <h3>115 网盘</h3>
+                  <button type="button" class="btn-test-provider" data-provider="c115">测试</button>
+                </div>
+                <div class="form-grid">
+                  <label><span>115 Base URL</span><input id="c115BaseUrl" /></label>
+                  <label class="password-field"><span>115 Cookie</span><div class="password-wrap"><input id="c115Cookie" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="c115Cookie">👁</button></div></label>
+                </div>
+                <small id="testResult-c115" class="test-result"></small>
+              </article>
+
+              <article class="card form-card provider-card">
+                <div class="card-title-row">
+                  <h3>夸克网盘</h3>
+                  <button type="button" class="btn-test-provider" data-provider="quark">测试</button>
+                </div>
+                <div class="form-grid">
+                  <label class="password-field"><span>夸克 Cookie</span><div class="password-wrap"><input id="quarkCookie" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="quarkCookie">👁</button></div></label>
+                </div>
+                <small id="testResult-quark" class="test-result"></small>
+              </article>
+
+              <article class="card form-card provider-card">
+                <div class="card-title-row">
+                  <h3>天翼云盘</h3>
+                  <button type="button" class="btn-test-provider" data-provider="tianyi">测试</button>
+                </div>
+                <div class="form-grid">
+                  <label><span>天翼账号</span><input id="tianyiUsername" placeholder="手机号/邮箱" /></label>
+                  <label class="password-field"><span>天翼密码</span><div class="password-wrap"><input id="tianyiPassword" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="tianyiPassword">👁</button></div></label>
+                </div>
+                <small id="testResult-tianyi" class="test-result"></small>
+              </article>
+
+              <article class="card form-card provider-card">
+                <div class="card-title-row">
+                  <h3>123 网盘</h3>
+                  <button type="button" class="btn-test-provider" data-provider="pan123">测试</button>
+                </div>
+                <div class="form-grid">
+                  <label><span>123 账号</span><input id="pan123Username" placeholder="手机号/邮箱" /></label>
+                  <label class="password-field"><span>123 密码</span><div class="password-wrap"><input id="pan123Password" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="pan123Password">👁</button></div></label>
+                </div>
+                <small id="testResult-pan123" class="test-result"></small>
+              </article>
+            </section>
+
+            <section data-tab-pane="search" class="form-pane" hidden>
+              <article class="card form-card provider-card">
+                <div class="card-title-row">
+                  <h3>PanSou 配置</h3>
+                  <button type="button" class="btn-test-provider" data-provider="pansou">测试</button>
+                </div>
+                <div class="form-grid compact-grid">
+                  <label><span>API 地址</span><input id="pansouBaseUrl" /></label>
+                  <label class="inline-toggles"><span>开关</span><div class="toggle-pack"><span>启用</span><input id="enablePansou" type="checkbox" class="toggle" /><span>代理</span><input id="pansouUseProxy" type="checkbox" class="toggle" /><span>认证</span><input id="pansouEnableAuth" type="checkbox" class="toggle" /></div></label>
+                  <label><span>认证用户名</span><input id="pansouUsername" /></label>
+                  <label class="password-field"><span>认证密码</span><div class="password-wrap"><input id="pansouPassword" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="pansouPassword">👁</button></div></label>
+                  <label><span>搜索路径</span><input id="pansouSearchPath" placeholder="/api/search" /></label>
+                  <label><span>请求方式</span><select id="pansouSearchMethod"><option value="POST">POST</option><option value="GET">GET</option></select></label>
+                  <label><span>数据来源</span><select id="pansouSource"><option value="all">全部</option><option value="tg">仅Telegram</option><option value="plugin">仅插件</option></select></label>
+                  <div class="chip-box">
+                    <span>网盘类型</span>
+                    <div class="chip-toolbar">
+                      <select id="pansouCloudTypeSelect"></select>
+                      <button type="button" id="addCloudTypeBtn">+</button>
+                    </div>
+                    <div id="pansouCloudTypeChips" class="chips"></div>
+                    <input id="pansouCloudTypes" hidden />
+                    <small class="hint">留空则默认使用全部网盘类型</small>
+                  </div>
+                </div>
+                <small id="testResult-pansou" class="test-result"></small>
+              </article>
+
+              <article class="card form-card provider-card">
+                <div class="card-title-row">
+                  <h3>Prowlarr 配置</h3>
+                  <button type="button" class="btn-test-provider" data-provider="prowlarr">测试</button>
+                </div>
+                <div class="form-grid compact-grid">
+                  <label><span>Prowlarr URL</span><input id="prowlarrBaseUrl" /></label>
+                  <label class="inline-toggles"><span>开关</span><div class="toggle-pack"><span>启用</span><input id="enableProwlarr" type="checkbox" class="toggle" /><span>代理</span><input id="prowlarrUseProxy" type="checkbox" class="toggle" /></div></label>
+                  <label class="password-field"><span>Prowlarr API Key</span><div class="password-wrap"><input id="prowlarrApiKey" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="prowlarrApiKey">👁</button></div><small id="prowlarrApiKeyHint" class="hint"></small></label>
+                </div>
+                <small id="testResult-prowlarr" class="test-result"></small>
+              </article>
+            </section>
+
+            <section data-tab-pane="system" class="form-pane" hidden>
+              <article class="card form-card provider-card">
+                <div class="card-title-row">
+                  <h3>代理配置</h3>
+                  <button type="button" class="btn-test-provider" data-provider="proxy">测试</button>
+                </div>
+                <div class="form-grid compact-grid">
+                  <label class="inline-toggles"><span>启用系统代理</span><div class="toggle-pack"><input id="systemProxyEnabled" type="checkbox" class="toggle" /></div></label>
+                  <label><span>系统代理</span><div class="proxy-inline"><select id="systemProxyScheme"><option value="http://">HTTP</option><option value="socks5://">SOCKS5</option></select><input id="systemProxyAddr" placeholder="127.0.0.1:7890" /></div></label>
+                </div>
+                <small id="testResult-proxy" class="test-result"></small>
+              </article>
+              <article class="card form-card provider-card">
+                <h3>账号安全</h3>
+                <div class="form-grid">
+                  <label><span>登录用户名</span><input id="systemUsername" placeholder="admin" /></label>
+                  <label class="password-field"><span>登录密码</span><div class="password-wrap"><input id="systemPassword" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="systemPassword">👁</button></div><small id="systemPasswordHint" class="hint"></small></label>
+                </div>
+              </article>
+            </section>
           </form>
-          <pre id="settingsHints" class="panel hints"></pre>
         </section>
       </main>
     </div>
 
-    <script src="/assets/app.js" type="module"></script>
+    <div id="dirPickerModal" class="modal" hidden>
+      <div class="modal-card dir-modal-card">
+        <h3>选择云盘目录</h3>
+        <div id="dirPickerPath" class="dir-picked-line">/</div>
+        <div id="dirPickerList" class="dir-picker-list"></div>
+        <div class="modal-actions">
+          <button id="dirPickerBackBtn" type="button">返回上级</button>
+          <button id="dirPickerCancelBtn" type="button">取消</button>
+          <button id="dirPickerConfirmBtn" type="button" class="btn-primary">确认选择</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="transferItemsModal" class="modal" hidden>
+      <div class="modal-card dir-modal-card">
+        <h3>选择转存资源</h3>
+        <div id="transferItemsTitle" class="dir-picked-line"></div>
+        <div id="transferItemsList" class="dir-picker-list"></div>
+        <div class="modal-actions">
+          <button id="transferItemsBackBtn" type="button">返回上级</button>
+          <button id="transferItemsCancelBtn" type="button">取消</button>
+          <button id="transferItemsNextBtn" type="button" class="btn-primary">下一步</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="loginOverlay" class="login-overlay" hidden>
+      <form id="loginForm" class="login-card">
+        <h2>登录 CloudMediaPilot</h2>
+        <p class="hint">默认：admin / admin</p>
+        <label><span>用户名</span><input id="loginUsername" autocomplete="username" /></label>
+        <label><span>密码</span><input id="loginPassword" type="password" autocomplete="current-password" /></label>
+        <button type="submit" class="btn-primary">登录</button>
+      </form>
+    </div>
+
+    <script src="/assets/app.js?v=20260412-5" type="module"></script>
   </body>
 </html>
