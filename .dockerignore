@@ -1,0 +1,9 @@
+.git
+.omx
+ref_repos
+__pycache__
+*.pyc
+.env
+.env.*
+key.txt
+backend/tests

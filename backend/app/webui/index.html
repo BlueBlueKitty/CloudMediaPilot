@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>CloudMediaPilot</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">CloudMediaPilot</div>
+        <nav id="nav" class="nav"></nav>
+      </aside>
+
+      <main class="content">
+        <section id="status" class="status" hidden></section>
+
+        <section data-page="recommend" class="page">
+          <h1>推荐</h1>
+          <form id="recommendForm" class="panel form-inline">
+            <input id="recommendQuery" placeholder="搜索 TMDB 影视资源" />
+            <button type="submit">搜索</button>
+            <button type="button" id="loadTrending">热门推荐</button>
+          </form>
+          <div id="recommendGrid" class="poster-grid"></div>
+        </section>
+
+        <section data-page="search" class="page" hidden>
+          <h1>搜索</h1>
+          <form id="resourceForm" class="panel form-inline">
+            <input id="resourceKeyword" placeholder="输入资源关键词" required />
+            <input id="resourceTargetDirId" placeholder="离线目录ID（留空使用默认目录）" />
+            <label class="inline-check">
+              <input id="useTmdbPrecision" type="checkbox" checked />
+              使用 TMDB 精准筛选
+            </label>
+            <button type="submit">搜索资源</button>
+          </form>
+
+          <div id="tmdbContextBox" class="panel context-box" hidden></div>
+
+          <div class="panel filters">
+            <label>来源
+              <select id="filterSource">
+                <option value="all">全部</option>
+                <option value="pansou">PanSou</option>
+                <option value="prowlarr">Prowlarr</option>
+              </select>
+            </label>
+            <label>网盘类型
+              <select id="filterCloudType">
+                <option value="all">全部</option>
+                <option value="magnet">磁力</option>
+                <option value="baidu">百度</option>
+                <option value="aliyun">阿里云盘</option>
+                <option value="quark">夸克</option>
+                <option value="uc">UC</option>
+                <option value="115">115</option>
+                <option value="pikpak">PikPak</option>
+                <option value="xunlei">迅雷</option>
+                <option value="ed2k">电驴</option>
+                <option value="other">其他</option>
+              </select>
+            </label>
+            <label>关键词
+              <input id="filterKeyword" placeholder="过滤标题" />
+            </label>
+          </div>
+
+          <div class="panel table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>标题</th>
+                  <th>来源</th>
+                  <th>网盘类型</th>
+                  <th>大小</th>
+                  <th>时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="resultBody"></tbody>
+            </table>
+          </div>
+
+          <div class="panel">
+            <button id="refreshTasks" type="button">刷新离线任务</button>
+          </div>
+          <div class="panel table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>任务ID</th>
+                  <th>状态</th>
+                  <th>来源</th>
+                  <th>目录ID</th>
+                  <th>时间</th>
+                </tr>
+              </thead>
+              <tbody id="taskBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section data-page="settings" class="page" hidden>
+          <h1>设置</h1>
+          <form id="settingsForm" class="panel settings-grid">
+            <h3>TMDB</h3>
+            <label class="inline-check">
+              <input id="enableTmdb" type="checkbox" />
+              启用 TMDB
+            </label>
+            <label>TMDB Base URL<input id="tmdbBaseUrl" /></label>
+            <label>TMDB API Key<input id="tmdbApiKey" type="password" placeholder="留空=保持不变" /></label>
+
+            <h3>Prowlarr</h3>
+            <label class="inline-check">
+              <input id="enableProwlarr" type="checkbox" />
+              启用 Prowlarr
+            </label>
+            <label>Prowlarr Base URL<input id="prowlarrBaseUrl" /></label>
+            <label>Prowlarr API Key<input id="prowlarrApiKey" type="password" placeholder="留空=保持不变" /></label>
+
+            <h3>PanSou</h3>
+            <label class="inline-check">
+              <input id="enablePansou" type="checkbox" />
+              启用 PanSou
+            </label>
+            <label>PanSou Base URL<input id="pansouBaseUrl" /></label>
+
+            <h3>115</h3>
+            <label>115 Base URL<input id="c115BaseUrl" required /></label>
+            <label>115 Cookie<textarea id="c115Cookie" rows="3" placeholder="留空=保持不变"></textarea></label>
+            <label>115 默认目标目录 ID<input id="c115TargetDirId" /></label>
+            <label>允许动作（逗号分隔）<input id="c115AllowedActions" /></label>
+            <label>离线新增路径<input id="c115OfflineAddPath" /></label>
+            <label>离线列表路径<input id="c115OfflineListPath" /></label>
+
+            <div class="actions">
+              <button type="submit">保存设置</button>
+              <button id="testConnections" type="button">测试连接</button>
+            </div>
+          </form>
+          <pre id="settingsHints" class="panel hints"></pre>
+        </section>
+      </main>
+    </div>
+
+    <script src="/assets/app.js" type="module"></script>
+  </body>
+</html>

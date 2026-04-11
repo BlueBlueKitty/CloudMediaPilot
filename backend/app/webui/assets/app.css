@@ -1,0 +1,288 @@
+:root {
+  --bg: #0d1118;
+  --panel: #131a25;
+  --panel-2: #1a2536;
+  --line: #2a3a55;
+  --text: #e7eefb;
+  --muted: #9eb0cf;
+  --accent: #4ea1ff;
+  --ok: #39be7f;
+  --warn: #d9a64e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--text);
+  background: radial-gradient(circle at 20% 0, #182338 0, var(--bg) 45%);
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 220px 1fr;
+}
+
+.sidebar {
+  border-right: 1px solid var(--line);
+  background: #0b111a;
+  padding: 18px 14px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.brand {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+
+.nav {
+  display: grid;
+  gap: 8px;
+}
+
+.nav button {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  border-radius: 10px;
+  text-align: left;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.nav button.active {
+  background: #23324c;
+  border-color: #3b5d8f;
+}
+
+.content {
+  padding: 22px;
+}
+
+.page h1 {
+  margin: 0 0 12px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+
+.status {
+  background: #15263f;
+  border: 1px solid #2d4a73;
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.status.ok {
+  background: #173828;
+  border-color: #2d7d57;
+}
+
+.status.warn {
+  background: #44301a;
+  border-color: #8f6a30;
+}
+
+.form-inline {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+input,
+select,
+textarea,
+button {
+  border: 1px solid #355075;
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 10px 12px;
+}
+
+input,
+select,
+textarea {
+  min-width: 220px;
+}
+
+button {
+  cursor: pointer;
+  background: #2a3f63;
+}
+
+button:hover {
+  filter: brightness(1.1);
+}
+
+.poster-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.poster-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.poster {
+  width: 100%;
+  height: 280px;
+  object-fit: cover;
+  background: #20314b;
+}
+
+.poster-card .body {
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.overview {
+  color: #c5d2ea;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  min-height: 54px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.context-box {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.pill {
+  font-size: 0.85rem;
+  border: 1px solid #496997;
+  border-radius: 999px;
+  padding: 4px 10px;
+  color: #b8d8ff;
+}
+
+.filters {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  min-width: auto;
+}
+
+.inline-check input {
+  min-width: auto;
+}
+
+.table-wrap {
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  padding: 10px;
+  vertical-align: top;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.settings-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.hints {
+  white-space: pre-wrap;
+  color: var(--muted);
+}
+
+.badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #456284;
+  font-size: 0.8rem;
+}
+
+.badge.completed {
+  border-color: #2d7d57;
+  color: #82e7b0;
+}
+
+.badge.running {
+  border-color: #8c7b2f;
+  color: #ffe28a;
+}
+
+.badge.failed {
+  border-color: #8a3c49;
+  color: #ff9ca9;
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .nav {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}

@@ -1,0 +1,24 @@
+# Local secrets / credentials
+key.txt
+.env
+.env.*
+!.env.example
+
+# OMX runtime state/logs
+.omx/logs/
+.omx/state/
+.omx/metrics.json
+
+# Python build/test cache
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local runtime data
+data/
+backend/tests/.tmp/
+
+AGENTS.md
+ref_repos/
