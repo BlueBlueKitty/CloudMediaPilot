@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import logging
 import re
 from urllib.parse import parse_qs, urlparse
 
@@ -9,6 +10,8 @@ import httpx
 from app.core.config import ProviderSettings
 from app.core.errors import AuthError, ProviderError, ValidationError
 from app.schemas.models import C115DirItem, PublicTaskState
+
+logger = logging.getLogger("provider.115")
 
 
 class C115Adapter:
@@ -28,6 +31,19 @@ class C115Adapter:
             from p115client import P115Client
 
             client = P115Client(self.settings.c115_cookie, check_for_relogin=False)
+            info_hash = self._extract_magnet_hash(source_uri)
+            if info_hash:
+                payload = {"info_hash": info_hash, "wp_path_id": target_dir_id}
+                resp = client.offline_add_torrent(payload, type="ssp")
+                data = resp if isinstance(resp, dict) else {}
+                nested_raw = data.get("data")
+                nested = nested_raw if isinstance(nested_raw, dict) else {}
+                if data.get("state") is True:
+                    task_id = data.get("task_id") or nested.get("task_id") or nested.get("info_hash") or info_hash
+                    return str(task_id)
+                if str(data.get("errcode") or nested.get("errcode")) == "10008":
+                    return str(nested.get("info_hash") or data.get("info_hash") or info_hash)
+
             payload = {"url": source_uri, "wp_path_id": target_dir_id}
             resp = client.offline_add_url(payload, type="ssp")
             data = resp if isinstance(resp, dict) else {}
@@ -64,9 +80,14 @@ class C115Adapter:
         try:
             data = resp.json()
         except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "115_upstream_non_json status=%s body=%s",
+                resp.status_code,
+                resp.text[:300],
+            )
             raise ProviderError(
                 "C115_UPSTREAM_ERROR",
-                f"115 non-json response: {resp.text[:120]}",
+                f"115 返回非 JSON 响应：{resp.text[:120]}",
                 502,
             ) from exc
         if not isinstance(data, dict):
@@ -75,6 +96,22 @@ class C115Adapter:
 
     def make_idempotency_key(self, source_uri: str, target_dir_id: str) -> str:
         return sha256(f"{source_uri}|{target_dir_id}".encode()).hexdigest()
+
+    @staticmethod
+    def _extract_magnet_hash(source_uri: str) -> str | None:
+        if not source_uri.startswith("magnet:"):
+            return None
+        parsed = urlparse(source_uri)
+        values = parse_qs(parsed.query).get("xt") or []
+        for value in values:
+            prefix = "urn:btih:"
+            if value.lower().startswith(prefix):
+                raw = value[len(prefix) :].strip()
+                if re.fullmatch(r"[A-Fa-f0-9]{40}", raw):
+                    return raw.upper()
+                if re.fullmatch(r"[A-Za-z2-7]{32}", raw):
+                    return raw.upper()
+        return None
 
     def _validate_source(self, source_uri: str) -> None:
         if not (
@@ -123,12 +160,20 @@ class C115Adapter:
             "Cookie": self.settings.c115_cookie,
             "Content-Type": "application/x-www-form-urlencoded",
         }
-        payload = {
-            "url": source_uri,
-            "savepath": target_dir_id,
-            "wp_path_id": target_dir_id,
-        }
-        url = f"{self.settings.c115_base_url}{self.settings.c115_offline_add_path}"
+        info_hash = self._extract_magnet_hash(source_uri)
+        if info_hash:
+            payload = {
+                "info_hash": info_hash,
+                "wp_path_id": target_dir_id,
+            }
+            url = f"{self.settings.c115_base_url}/lixianssp/?ac=add_task_bt"
+        else:
+            payload = {
+                "url": source_uri,
+                "savepath": target_dir_id,
+                "wp_path_id": target_dir_id,
+            }
+            url = f"{self.settings.c115_base_url}{self.settings.c115_offline_add_path}"
         try:
             async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
                 resp = await client.post(url, headers=headers, data=payload)
@@ -368,7 +413,12 @@ class C115Adapter:
                         continue
                     ns = row.get("ns")
                     ns_int = int(ns) if isinstance(ns, int | float) or (isinstance(ns, str) and ns.isdigit()) else 0
-                    is_dir = bool(ns_int > 0 or row.get("is_dir") or row.get("is_directory"))
+                    is_dir = bool(
+                        ns_int > 0
+                        or row.get("is_dir")
+                        or row.get("is_directory")
+                        or (row.get("fid") in {None, "", 0, "0"} and row.get("cid"))
+                    )
                     fid = str((row.get("cid") if is_dir else row.get("fid")) or row.get("cid") or "").strip()
                     name = str(row.get("n") or row.get("name") or "").strip()
                     if not fid or not name:

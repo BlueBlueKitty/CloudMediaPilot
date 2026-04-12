@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 
@@ -9,6 +10,8 @@ from app.adapters.prowlarr import ProwlarrAdapter
 from app.adapters.tmdb import TMDBAdapter
 from app.core.errors import ProviderError
 from app.schemas.models import SearchResponse, SearchResultItem, TMDBSearchContext
+
+logger = logging.getLogger("resource_search")
 
 
 class SearchService:
@@ -27,6 +30,7 @@ class SearchService:
         started = time.perf_counter()
         partial_success = False
         warnings: list[str] = []
+        logger.info("search_started title=%s limit=%s", keyword, limit)
 
         source_limit = max(limit * 2, 500)
         pansou_task = asyncio.create_task(self.pansou.search(keyword, source_limit))
@@ -38,6 +42,7 @@ class SearchService:
         for task_name, task in (("pansou", pansou_task), ("prowlarr", prowlarr_task)):
             try:
                 out = await task
+                logger.info("search_provider_succeeded provider=%s title=%s count=%s", task_name, keyword, len(out))
                 if task_name == "pansou":
                     pansou_results = out
                 else:
@@ -45,6 +50,7 @@ class SearchService:
             except ProviderError as exc:
                 partial_success = True
                 warnings.append(f"{task_name}:{exc.message}")
+                logger.error("search_provider_failed provider=%s title=%s error=%s", task_name, keyword, exc.message)
 
         merged = self._dedupe(pansou_results + prowlarr_results)
         if tmdb_context:
@@ -63,6 +69,12 @@ class SearchService:
                 partial_success = True
 
         elapsed = int((time.perf_counter() - started) * 1000)
+        logger.info(
+            "search_finished title=%s provider=all total_results=%s took_ms=%s",
+            keyword,
+            len(merged),
+            elapsed,
+        )
         return SearchResponse(
             request_id=request_id,
             keyword=keyword,

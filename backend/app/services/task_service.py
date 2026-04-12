@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from app.adapters.c115 import C115Adapter
 from app.adapters.quark import QuarkAdapter
 from app.core.config import ProviderSettings
@@ -16,6 +18,8 @@ from app.schemas.models import (
 )
 from app.services.task_store import TaskRecord, store
 from app.utils.media import infer_cloud_type
+
+logger = logging.getLogger("transfer")
 
 
 class TaskService:
@@ -164,16 +168,30 @@ class TaskService:
     ) -> TransferCommitResponse:
         cloud_type = (preferred_cloud_type or "").strip().lower() or infer_cloud_type(source_uri)
         self._ensure_configured(cloud_type)
-        if cloud_type in {"magnet", "ed2k"}:
-            task = await self.create_offline_task(request_id, source_uri, target_dir_id)
-            return TransferCommitResponse(request_id=request_id, task_id=task.task_id, provider=cloud_type)
-        if cloud_type == "115":
-            task_id = await self.c115.save_share_items(source_uri, target_dir_id, selected_ids)
-            return TransferCommitResponse(request_id=request_id, task_id=task_id, provider=cloud_type)
-        if cloud_type == "quark":
-            task_id = await self.quark.save_selected_items(source_uri, target_dir_id, selected_ids)
-            return TransferCommitResponse(request_id=request_id, task_id=task_id, provider=cloud_type)
-        raise ValidationError("TRANSFER_NOT_SUPPORTED", "当前链接类型暂不支持转存", 400)
+        logger.info(
+            "transfer_started provider=%s target_dir=%s source=%s selected=%s",
+            cloud_type,
+            target_dir_id,
+            source_uri[:120],
+            len(selected_ids),
+        )
+        try:
+            if cloud_type in {"magnet", "ed2k"}:
+                task = await self.create_offline_task(request_id, source_uri, target_dir_id)
+                logger.info("transfer_succeeded provider=%s task_id=%s", cloud_type, task.task_id)
+                return TransferCommitResponse(request_id=request_id, task_id=task.task_id, provider=cloud_type)
+            if cloud_type == "115":
+                task_id = await self.c115.save_share_items(source_uri, target_dir_id, selected_ids)
+                logger.info("transfer_succeeded provider=%s task_id=%s", cloud_type, task_id)
+                return TransferCommitResponse(request_id=request_id, task_id=task_id, provider=cloud_type)
+            if cloud_type == "quark":
+                task_id = await self.quark.save_selected_items(source_uri, target_dir_id, selected_ids)
+                logger.info("transfer_succeeded provider=%s task_id=%s", cloud_type, task_id)
+                return TransferCommitResponse(request_id=request_id, task_id=task_id, provider=cloud_type)
+            raise ValidationError("TRANSFER_NOT_SUPPORTED", "当前链接类型暂不支持转存", 400)
+        except Exception as exc:
+            logger.error("transfer_failed provider=%s error=%s", cloud_type, exc)
+            raise
 
     async def create_offline_task(
         self, request_id: str, source_uri: str, target_dir_id: str

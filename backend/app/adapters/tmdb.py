@@ -132,6 +132,32 @@ class TMDBAdapter:
             "tmdb_poster": top.poster_url,
         }
 
+    async def detail_by_title(self, title: str) -> dict:
+        rows = await self.search(title, limit=5)
+        if not rows:
+            return {}
+        wanted = "".join(title.lower().split())
+        top = next((row for row in rows if "".join(row.title.lower().split()) == wanted), rows[0])
+        if self.settings.use_mock or not self.settings.tmdb_api_key:
+            return top.model_dump()
+        media = "tv" if top.media_type == "series" else "movie"
+        params = {"api_key": self.settings.tmdb_api_key, "language": "zh-CN", "append_to_response": "credits"}
+        try:
+            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds, proxy=self._proxy()) as client:
+                resp = await client.get(f"{self.settings.tmdb_base_url}/{media}/{top.tmdb_id}", params=params)
+            resp.raise_for_status()
+            body = resp.json() if resp.content else {}
+        except Exception:  # noqa: BLE001
+            return top.model_dump()
+        genres = [str(x.get("name")) for x in body.get("genres") or [] if isinstance(x, dict) and x.get("name")]
+        crew = ((body.get("credits") or {}).get("crew") or []) if isinstance(body, dict) else []
+        cast_rows = ((body.get("credits") or {}).get("cast") or []) if isinstance(body, dict) else []
+        director = next((str(x.get("name")) for x in crew if isinstance(x, dict) and x.get("job") in {"Director", "Creator"} and x.get("name")), None)
+        cast = [str(x.get("name")) for x in cast_rows[:4] if isinstance(x, dict) and x.get("name")]
+        data = top.model_dump()
+        data.update({"genres": genres, "director": director, "cast": cast})
+        return data
+
     async def check(self) -> tuple[bool, str]:
         if self.settings.use_mock:
             return True, "mock_ok"

@@ -49,6 +49,7 @@ from app.schemas.models import (
 )
 from app.services.app_config_service import AppConfigStore, build_provider_settings, hash_password
 from app.services.auth_service import issue_session_token, parse_session_token, verify_password
+from app.services.log_service import handler as memory_log_handler
 from app.services.provider_status_service import ProviderStatusService
 from app.services.search_service import SearchService
 from app.services.task_service import TaskService
@@ -98,7 +99,6 @@ async def auth_login(payload: AuthLoginRequest, store: AppConfigStore = Depends(
     cfg = store.get()
     if payload.username != cfg.system_username or not verify_password(payload.password, cfg):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
-
     token = issue_session_token(cfg)
     res = JSONResponse(content=AuthUserResponse(authenticated=True, username=cfg.system_username).model_dump())
     res.set_cookie(
@@ -223,6 +223,16 @@ async def recommend_categories(_: str = Depends(_require_auth)) -> dict:
             {"id": "tv|综艺", "name": "豆瓣热门综艺"},
         ],
     }
+
+
+@router.get("/recommend/detail")
+async def recommend_detail(
+    title: str = Query(min_length=1, max_length=200),
+    store: AppConfigStore = Depends(get_app_config_store),
+    _: str = Depends(_require_auth),
+) -> dict:
+    runtime = get_settings()
+    return await TMDBAdapter(build_provider_settings(runtime, store.get())).detail_by_title(title)
 
 
 @router.get("/tmdb/image")
@@ -371,7 +381,19 @@ async def get_app_settings(
     store: AppConfigStore = Depends(get_app_config_store),
     _: str = Depends(_require_auth),
 ) -> SettingsResponse:
-    masked = store.mask(store.get())
+    cfg = store.get()
+    masked = store.mask(cfg)
+    masked.update(
+        {
+            "tmdb_api_key": cfg.tmdb_api_key,
+            "prowlarr_api_key": cfg.prowlarr_api_key,
+            "pansou_password": cfg.pansou_password,
+            "c115_cookie": cfg.c115_cookie,
+            "quark_cookie": cfg.quark_cookie,
+            "tianyi_password": cfg.tianyi_password,
+            "pan123_password": cfg.pan123_password,
+        }
+    )
     return SettingsResponse(**masked)
 
 
@@ -425,7 +447,33 @@ async def update_app_settings(
         system_proxy_enabled=payload.system_proxy_enabled,
         system_password_hash=system_password_hash,
     )
-    return SettingsResponse(**store.mask(next_cfg))
+    masked = store.mask(next_cfg)
+    masked.update(
+        {
+            "tmdb_api_key": next_cfg.tmdb_api_key,
+            "prowlarr_api_key": next_cfg.prowlarr_api_key,
+            "pansou_password": next_cfg.pansou_password,
+            "c115_cookie": next_cfg.c115_cookie,
+            "quark_cookie": next_cfg.quark_cookie,
+            "tianyi_password": next_cfg.tianyi_password,
+            "pan123_password": next_cfg.pan123_password,
+        }
+    )
+    return SettingsResponse(**masked)
+
+
+@router.get("/app/info")
+async def app_info(_: str = Depends(_require_auth)) -> dict:
+    return {"name": "CloudMediaPilot", "version": "0.1.0"}
+
+
+@router.get("/logs")
+async def app_logs(
+    level: str = Query(default="all", pattern="^(all|debug|info|warn|warning|error)$"),
+    limit: int = Query(default=300, ge=1, le=1000),
+    _: str = Depends(_require_auth),
+) -> dict:
+    return {"items": memory_log_handler.list(level=level, limit=limit)}
 
 
 @router.post("/settings/test", response_model=ConnectionTestResponse)

@@ -85,6 +85,9 @@ class TMDBSearchItem(BaseModel):
     country: str | None = None
     language: str | None = None
     episodes: int | None = None
+    genres: list[str] = Field(default_factory=list)
+    director: str | None = None
+    cast: list[str] = Field(default_factory=list)
 
 
 class TMDBSearchResponse(BaseModel):
@@ -201,11 +204,13 @@ class SettingsResponse(BaseModel):
     tmdb_image_base_url: str
     tmdb_use_proxy: bool
     tmdb_api_key_masked: str
+    tmdb_api_key: str = ""
     has_tmdb_api_key: bool
 
     prowlarr_base_url: str
     prowlarr_use_proxy: bool
     prowlarr_api_key_masked: str
+    prowlarr_api_key: str = ""
     has_prowlarr_api_key: bool
 
     pansou_base_url: str
@@ -217,6 +222,7 @@ class SettingsResponse(BaseModel):
     pansou_cloud_types: str
     pansou_source: str
     pansou_password_masked: str
+    pansou_password: str = ""
     has_pansou_password: bool
     enable_tmdb: bool
     enable_prowlarr: bool
@@ -224,6 +230,7 @@ class SettingsResponse(BaseModel):
 
     c115_base_url: str
     c115_cookie_masked: str
+    c115_cookie: str = ""
     has_c115_cookie: bool
     c115_allowed_actions: str
     c115_target_dir_id: str
@@ -234,15 +241,19 @@ class SettingsResponse(BaseModel):
     c115_offline_list_path: str
     storage_providers: str
     quark_cookie_masked: str
+    quark_cookie: str = ""
     tianyi_username: str
     tianyi_password_masked: str
+    tianyi_password: str = ""
     pan123_username: str
     pan123_password_masked: str
+    pan123_password: str = ""
 
     system_username: str
     system_proxy_url: str
     system_proxy_enabled: bool
     system_password_masked: str
+    system_password: str = ""
     has_system_password: bool
 
 

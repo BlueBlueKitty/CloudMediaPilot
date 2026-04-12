@@ -4,12 +4,16 @@ const state = {
   recommendCategory: "trend_day",
   recommendCategories: { tmdb: [], douban: [] },
   recommendSearchMode: false,
+  recommendCache: new Map(),
   tmdbSearchCache: new Map(),
+  detailCache: new Map(),
 
   resources: [],
   filtered: [],
-  renderedCount: 0,
+  currentPage: 1,
   pageSize: 30,
+  resultSelectMode: false,
+  selectedResultIds: new Set(),
   sourceFilter: "all",
   cloudTypeFilter: "all",
   sortBy: "score_desc",
@@ -142,42 +146,32 @@ function getImageMode() {
 
 function posterSrc(url) {
   if (!url) return IMG_FALLBACK;
-  if (getImageMode() === "proxy") {
+  if (getImageMode() === "proxy" || String(url).includes("doubanio.com")) {
     return "/tmdb/image?url=" + encodeURIComponent(url);
   }
   return url;
 }
 
 function getRecommendCacheKey(source, category) {
-  return `cmp_recommend_cache_v3:${source}:${category}`;
+  return `${source}:${category}`;
 }
 
 function getRecommendCache(source, category) {
-  try {
-    const raw = localStorage.getItem(getRecommendCacheKey(source, category));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || !Array.isArray(parsed.items) || !parsed.ts) return null;
-    if (Date.now() - parsed.ts > 6 * 3600 * 1000) return null;
-    return parsed.items;
-  } catch {
-    return null;
-  }
+  const cached = state.recommendCache.get(getRecommendCacheKey(source, category));
+  if (!cached || !Array.isArray(cached.items) || !cached.ts) return null;
+  if (Date.now() - cached.ts > 6 * 3600 * 1000) return null;
+  return cached.items;
 }
 
 function setRecommendCache(source, category, items) {
-  try {
-    localStorage.setItem(
-      getRecommendCacheKey(source, category),
-      JSON.stringify({ ts: Date.now(), items: items || [] })
-    );
-  } catch {}
+  state.recommendCache.set(getRecommendCacheKey(source, category), {
+    ts: Date.now(),
+    items: items || [],
+  });
 }
 
 function clearRecommendCache(source, category) {
-  try {
-    localStorage.removeItem(getRecommendCacheKey(source, category));
-  } catch {}
+  state.recommendCache.delete(getRecommendCacheKey(source, category));
 }
 
 function mediaTypeLabel(type) {
@@ -227,6 +221,7 @@ function renderRecommendGrid(items) {
   items.forEach((item) => {
     const card = document.createElement("article");
     card.className = "trend-card";
+    card.dataset.title = item.title || "";
     const tags = [];
     const isValidText = (v) => !!v && !String(v).includes("未知");
     if (item.year) tags.push(String(item.year));
@@ -234,16 +229,19 @@ function renderRecommendGrid(items) {
     if (isValidText(item.language)) tags.push(String(item.language).toUpperCase());
     if (item.episodes) tags.push(`${item.episodes}集`);
     if (state.recommendSource === "douban" && isValidText(item.overview)) tags.push(String(item.overview));
+    const cachedDetail = state.detailCache.get(item.title || "");
     card.innerHTML = `
       <div class="poster-wrap">
         <img alt="${escapeHtml(item.title)}" src="${escapeHtml(posterSrc(item.poster_url))}" />
-        <span class="badge-type">${mediaTypeLabel(item.media_type)}</span>
+        <div class="poster-blur" style="background-image:url('${escapeHtml(posterSrc(item.poster_url))}')"></div>
+        <div class="poster-overlay">
+          <button type="button" class="poster-search-btn" title="搜索资源">🔍</button>
+          <div class="poster-detail">${escapeHtml(cachedDetail || "详情预加载中...")}</div>
+        </div>
         <span class="badge-score">★ ${item.rating || "-"}</span>
-        <button type="button" class="poster-search-btn" title="搜索资源">🔍</button>
       </div>
       <div class="trend-body">
         <div class="trend-title">${escapeHtml(item.title)}</div>
-        <div class="trend-meta">${tags.map((x) => `<span class="tag">${escapeHtml(x)}</span>`).join("")}</div>
       </div>
     `;
     const poster = card.querySelector("img");
@@ -257,8 +255,48 @@ function renderRecommendGrid(items) {
       setStatus("正在搜索资源...");
       await doResourceSearch(item.title || "", document.getElementById("resourceSearchBtn"));
     };
+    card.onmouseenter = () => loadRecommendDetail(item, card);
     root.appendChild(card);
   });
+  prefetchRecommendDetails(items);
+}
+
+async function loadRecommendDetail(item, card) {
+  const box = card.querySelector(".poster-detail");
+  if (!box || !item.title) return;
+  if (state.detailCache.has(item.title)) {
+    box.textContent = state.detailCache.get(item.title);
+    return;
+  }
+  try {
+    const data = await api(`/recommend/detail?title=${encodeURIComponent(item.title)}`);
+    const parts = [];
+    if (data.year) parts.push(String(data.year));
+    if (data.country) parts.push(String(data.country));
+    if (Array.isArray(data.genres)) parts.push(...data.genres.slice(0, 3));
+    if (data.director) parts.push(data.director);
+    if (Array.isArray(data.cast)) parts.push(data.cast.slice(0, 4).join(" "));
+    const text = parts.filter(Boolean).join(" / ") || `${item.title}${item.rating ? " / " + item.rating : ""}`;
+    state.detailCache.set(item.title, text);
+    document.querySelectorAll(`.trend-card[data-title="${CSS.escape(item.title)}"] .poster-detail`).forEach((el) => {
+      el.textContent = text;
+    });
+  } catch {
+    box.textContent = `${item.title}${item.rating ? " / " + item.rating : ""}`;
+  }
+}
+
+function prefetchRecommendDetails(items) {
+  const queue = items.filter((item) => item.title && !state.detailCache.has(item.title)).slice(0, 36);
+  let index = 0;
+  const workers = Array.from({ length: 6 }, async () => {
+    while (index < queue.length) {
+      const item = queue[index++];
+      const card = document.querySelector(`.trend-card[data-title="${CSS.escape(item.title)}"]`);
+      await loadRecommendDetail(item, card || document.createElement("div"));
+    }
+  });
+  setTimeout(() => Promise.allSettled(workers), 30);
 }
 
 function updateRecommendCategoryOptions() {
@@ -397,9 +435,66 @@ function applyFilters() {
   });
 
   state.filtered = rows;
-  state.renderedCount = 0;
+  state.currentPage = 1;
   renderSummary();
   renderResourceList();
+}
+
+function resultId(row) {
+  return `${row.source || ""}|${row.source_id || ""}|${row.link || ""}|${row.magnet || ""}`;
+}
+
+function validPublishTime(value) {
+  if (!value) return null;
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime()) || dt.getFullYear() <= 1971) return null;
+  return dt;
+}
+
+function formatPublishTime(value) {
+  const dt = validPublishTime(value);
+  return dt ? dt.toLocaleString() : "-";
+}
+
+function visiblePageRows() {
+  const start = (state.currentPage - 1) * state.pageSize;
+  return state.filtered.slice(start, start + state.pageSize);
+}
+
+function setResultSelected(row, selected) {
+  const id = resultId(row);
+  if (selected) state.selectedResultIds.add(id);
+  else state.selectedResultIds.delete(id);
+}
+
+function renderSearchBulkControls() {
+  const box = document.getElementById("searchBulkControls");
+  if (!box) return;
+  const pageRows = visiblePageRows();
+  const selectedOnPage = pageRows.filter((row) => state.selectedResultIds.has(resultId(row))).length;
+  box.hidden = !state.resultSelectMode;
+  box.innerHTML = `
+    <button id="selectPageResultsBtn" type="button">全选本页</button>
+    <button id="selectAllResultsBtn" type="button">全部选择</button>
+    <button id="batchTransferBtn" type="button">一键转存选中</button>
+    <button id="clearResultSelectionBtn" type="button">取消选择</button>
+    <span>已选 ${state.selectedResultIds.size} 个，本页 ${selectedOnPage}/${pageRows.length}</span>
+  `;
+  document.getElementById("selectPageResultsBtn").onclick = () => {
+    const allSelected = pageRows.length > 0 && selectedOnPage === pageRows.length;
+    pageRows.forEach((row) => setResultSelected(row, !allSelected));
+    renderResourceList();
+  };
+  document.getElementById("clearResultSelectionBtn").onclick = () => {
+    state.selectedResultIds.clear();
+    renderResourceList();
+  };
+  document.getElementById("selectAllResultsBtn").onclick = () => {
+    const allSelected = state.filtered.length > 0 && state.filtered.every((row) => state.selectedResultIds.has(resultId(row)));
+    state.filtered.forEach((row) => setResultSelected(row, !allSelected));
+    renderResourceList();
+  };
+  document.getElementById("batchTransferBtn").onclick = batchTransferSelected;
 }
 
 async function copyText(text) {
@@ -420,8 +515,11 @@ async function copyText(text) {
 function renderListItem(row) {
   const item = document.createElement("article");
   item.className = "resource-item";
+  const id = resultId(row);
+  item.classList.toggle("is-selected", state.selectedResultIds.has(id));
   const sourceText = row.magnet || row.link || row.source_id || "-";
   item.innerHTML = `
+    ${state.resultSelectMode ? `<label class="result-check"><input type="checkbox" ${state.selectedResultIds.has(id) ? "checked" : ""} /></label>` : ""}
     <div class="resource-main">
       <div class="trend-meta">
         <span class="tag">${escapeHtml(row.source || "-")}</span>
@@ -432,13 +530,26 @@ function renderListItem(row) {
     </div>
     <div class="resource-side">
       <div class="meta-line">大小/热度：${row.size ? Math.round(row.size / 1024 / 1024) + " MB" : "-"} / ${Math.round(row.score || 0)}</div>
-      <div class="meta-line">时间：${row.publish_time ? new Date(row.publish_time).toLocaleString() : "-"}</div>
+      <div class="meta-line">时间：${formatPublishTime(row.publish_time)}</div>
       <div class="resource-actions">
         <button class="btn-save" type="button">一键转存</button>
         <button class="btn-open" type="button">打开链接</button>
       </div>
     </div>
   `;
+  const check = item.querySelector(".result-check input");
+  if (check) {
+    check.onchange = (e) => {
+      setResultSelected(row, e.currentTarget.checked);
+      item.classList.toggle("is-selected", e.currentTarget.checked);
+      renderSearchBulkControls();
+    };
+    item.addEventListener("click", (e) => {
+      if (e.target === check || e.target.closest("button") || e.target.closest("a")) return;
+      check.checked = !check.checked;
+      check.dispatchEvent(new Event("change"));
+    });
+  }
   const linkSpan = item.querySelector(".truncate-one");
   linkSpan.addEventListener("contextmenu", async (e) => {
     e.preventDefault();
@@ -464,8 +575,11 @@ function renderListItem(row) {
 function renderPosterCard(row) {
   const card = document.createElement("article");
   card.className = "poster-result-card";
+  const id = resultId(row);
+  card.classList.toggle("is-selected", state.selectedResultIds.has(id));
   const img = posterSrc(row.tmdb_poster || "");
   card.innerHTML = `
+    ${state.resultSelectMode ? `<label class="result-check poster-check"><input type="checkbox" ${state.selectedResultIds.has(id) ? "checked" : ""} /></label>` : ""}
     <img src="${escapeHtml(img)}" alt="${escapeHtml(row.title || "-")}" />
     <div class="body">
       <div class="title">${escapeHtml(row.title || "-")}</div>
@@ -477,6 +591,19 @@ function renderPosterCard(row) {
       </div>
     </div>
   `;
+  const check = card.querySelector(".result-check input");
+  if (check) {
+    check.onchange = (e) => {
+      setResultSelected(row, e.currentTarget.checked);
+      card.classList.toggle("is-selected", e.currentTarget.checked);
+      renderSearchBulkControls();
+    };
+    card.addEventListener("click", (e) => {
+      if (e.target === check || e.target.closest("button") || e.target.closest("a")) return;
+      check.checked = !check.checked;
+      check.dispatchEvent(new Event("change"));
+    });
+  }
   const poster = card.querySelector("img");
   poster.onerror = () => {
     poster.onerror = null;
@@ -492,27 +619,60 @@ function renderPosterCard(row) {
 
 function renderResourceList() {
   const list = document.getElementById("resourceList");
-  if (state.renderedCount === 0) {
-    list.textContent = "";
-    list.className = state.resultView === "poster" ? "poster-result-grid" : "resource-list";
-  }
+  list.textContent = "";
+  list.className = state.resultView === "poster" ? "poster-result-grid" : "resource-list";
 
   if (!state.filtered.length) {
     list.className = "resource-list";
     list.innerHTML = '<div class="card">暂无搜索结果</div>';
-    document.getElementById("loadMoreBtn").hidden = true;
+    renderPagination();
+    renderSearchBulkControls();
     return;
   }
 
-  const start = state.renderedCount;
-  const end = Math.min(state.filtered.length, start + state.pageSize);
-  for (let i = start; i < end; i += 1) {
-    const row = state.filtered[i];
+  visiblePageRows().forEach((row) => {
     list.appendChild(state.resultView === "poster" ? renderPosterCard(row) : renderListItem(row));
-  }
+  });
 
-  state.renderedCount = end;
-  document.getElementById("loadMoreBtn").hidden = state.renderedCount >= state.filtered.length;
+  renderPagination();
+  renderSearchBulkControls();
+}
+
+function renderPagination() {
+  const box = document.getElementById("resultPagination");
+  if (!box) return;
+  const totalPages = Math.max(1, Math.ceil(state.filtered.length / state.pageSize));
+  state.currentPage = Math.min(Math.max(1, state.currentPage), totalPages);
+  if (!state.filtered.length) {
+    box.hidden = true;
+    return;
+  }
+  const makePageButton = (page, label = String(page)) =>
+    `<button type="button" data-page="${page}" class="${page === state.currentPage ? "active" : ""}">${label}</button>`;
+  const pages = [];
+  const start = Math.max(1, state.currentPage - 2);
+  const end = Math.min(totalPages, state.currentPage + 2);
+  if (start > 1) pages.push(makePageButton(1));
+  if (start > 2) pages.push("<span>...</span>");
+  for (let page = start; page <= end; page += 1) pages.push(makePageButton(page));
+  if (end < totalPages - 1) pages.push("<span>...</span>");
+  if (end < totalPages) pages.push(makePageButton(totalPages));
+
+  box.hidden = false;
+  box.innerHTML = `
+    <button type="button" data-page="${state.currentPage - 1}" ${state.currentPage <= 1 ? "disabled" : ""}>上一页</button>
+    ${pages.join("")}
+    <button type="button" data-page="${state.currentPage + 1}" ${state.currentPage >= totalPages ? "disabled" : ""}>下一页</button>
+    <span>第 ${state.currentPage}/${totalPages} 页，共 ${state.filtered.length} 条</span>
+  `;
+  box.querySelectorAll("button[data-page]").forEach((btn) => {
+    btn.onclick = () => {
+      const page = Number(btn.dataset.page);
+      if (!Number.isFinite(page)) return;
+      state.currentPage = Math.min(Math.max(1, page), totalPages);
+      renderResourceList();
+    };
+  });
 }
 
 async function doResourceSearch(keyword, buttonEl) {
@@ -525,6 +685,7 @@ async function doResourceSearch(keyword, buttonEl) {
       body: JSON.stringify({ keyword: text, limit: 500 }),
     });
     state.resources = data.results || [];
+    state.selectedResultIds.clear();
     applyFilters();
     if (Array.isArray(data.warnings) && data.warnings.length) {
       setStatus(`检索完成 ${data.total || 0} 条；告警：${data.warnings.join("；")}`, "warn");
@@ -585,6 +746,13 @@ function showMaskedHint(elId, _label, _masked) {
   el.textContent = "";
 }
 
+function setSecretInput(id, masked) {
+  const input = document.getElementById(id);
+  if (!input) return;
+  input.value = masked || "";
+  input.placeholder = "";
+}
+
 function splitProxyUrl(proxyUrl) {
   const raw = (proxyUrl || "").trim();
   if (!raw) return { scheme: "http://", addr: "" };
@@ -618,8 +786,7 @@ async function loadSettings() {
 
   document.getElementById("tmdbBaseUrl").value = data.tmdb_base_url || "";
   document.getElementById("tmdbImageBaseUrl").value = data.tmdb_image_base_url || "";
-  document.getElementById("tmdbApiKey").value = "";
-  document.getElementById("tmdbApiKey").placeholder = "留空=保持不变";
+  setSecretInput("tmdbApiKey", data.tmdb_api_key || data.tmdb_api_key_masked || "");
   document.getElementById("tmdbUseProxy").checked = !!data.tmdb_use_proxy;
 
   document.getElementById("enablePansou").checked = !!data.enable_pansou;
@@ -629,8 +796,7 @@ async function loadSettings() {
   document.getElementById("pansouUseProxy").checked = !!data.pansou_use_proxy;
   document.getElementById("pansouEnableAuth").checked = !!data.pansou_enable_auth;
   document.getElementById("pansouUsername").value = data.pansou_username || "";
-  document.getElementById("pansouPassword").value = "";
-  document.getElementById("pansouPassword").placeholder = "留空=保持不变";
+  setSecretInput("pansouPassword", data.pansou_password || data.pansou_password_masked || "");
   document.getElementById("pansouSource").value = data.pansou_source || "all";
   state.pansouCloudTypes = (data.pansou_cloud_types || "")
     .split(",")
@@ -642,24 +808,18 @@ async function loadSettings() {
   document.getElementById("enableProwlarr").checked = !!data.enable_prowlarr;
   document.getElementById("prowlarrBaseUrl").value = data.prowlarr_base_url || "";
   document.getElementById("prowlarrUseProxy").checked = !!data.prowlarr_use_proxy;
-  document.getElementById("prowlarrApiKey").value = "";
-  document.getElementById("prowlarrApiKey").placeholder = "留空=保持不变";
+  setSecretInput("prowlarrApiKey", data.prowlarr_api_key || data.prowlarr_api_key_masked || "");
 
   document.getElementById("c115BaseUrl").value = data.c115_base_url || "";
-  document.getElementById("c115Cookie").value = "";
-  document.getElementById("c115Cookie").placeholder = "留空=保持不变";
-  document.getElementById("quarkCookie").value = "";
-  document.getElementById("quarkCookie").placeholder = "留空=保持不变";
+  setSecretInput("c115Cookie", data.c115_cookie || data.c115_cookie_masked || "");
+  setSecretInput("quarkCookie", data.quark_cookie || data.quark_cookie_masked || "");
   document.getElementById("tianyiUsername").value = data.tianyi_username || "";
-  document.getElementById("tianyiPassword").value = "";
-  document.getElementById("tianyiPassword").placeholder = "留空=保持不变";
+  setSecretInput("tianyiPassword", data.tianyi_password || data.tianyi_password_masked || "");
   document.getElementById("pan123Username").value = data.pan123_username || "";
-  document.getElementById("pan123Password").value = "";
-  document.getElementById("pan123Password").placeholder = "留空=保持不变";
+  setSecretInput("pan123Password", data.pan123_password || data.pan123_password_masked || "");
 
   document.getElementById("systemUsername").value = data.system_username || "admin";
-  document.getElementById("systemPassword").value = "";
-  document.getElementById("systemPassword").placeholder = "留空=保持不变";
+  setSecretInput("systemPassword", "");
   document.getElementById("systemProxyEnabled").checked = !!data.system_proxy_enabled;
   const proxy = splitProxyUrl(data.system_proxy_url || "");
   document.getElementById("systemProxyScheme").value = proxy.scheme;
@@ -668,7 +828,7 @@ async function loadSettings() {
   showMaskedHint("tmdbApiKeyHint", "TMDB Key", data.tmdb_api_key_masked || "");
   showMaskedHint("prowlarrApiKeyHint", "Prowlarr Key", data.prowlarr_api_key_masked || "");
   showMaskedHint("pansouPasswordHint", "PanSou 密码", data.pansou_password_masked || "");
-  showMaskedHint("systemPasswordHint", "登录密码", data.system_password_masked || "");
+  showMaskedHint("systemPasswordHint", "设置新密码", "");
 }
 
 async function saveSettings(event) {
@@ -754,6 +914,32 @@ async function testProvider(provider) {
   }
 }
 
+async function loadAppInfo() {
+  try {
+    const data = await api("/app/info");
+    document.getElementById("appVersion").textContent = `${data.name || "CloudMediaPilot"} v${data.version || "-"}`;
+  } catch {}
+}
+
+async function doLogout() {
+  await api("/auth/logout", { method: "POST", body: "{}" });
+  location.reload();
+}
+
+async function loadLogs() {
+  const level = document.getElementById("logLevelFilter").value;
+  const data = await api(`/logs?level=${encodeURIComponent(level)}&limit=300`);
+  const root = document.getElementById("logsList");
+  root.innerHTML = (data.items || [])
+    .slice()
+    .reverse()
+    .map((row) => {
+      const time = new Date(row.time).toLocaleString();
+      return `<div class="log-row ${escapeHtml(String(row.level || "").toLowerCase())}"><span>${escapeHtml(time)}</span><b>${escapeHtml(row.level)}</b><code>${escapeHtml(row.message)}</code></div>`;
+    })
+    .join("") || '<div class="dir-item">暂无日志</div>';
+}
+
 async function ensureAuth() {
   const auth = await api("/auth/me");
   const overlay = document.getElementById("loginOverlay");
@@ -767,6 +953,11 @@ async function ensureAuth() {
 
 async function doLogin(event) {
   event.preventDefault();
+  const loginError = document.getElementById("loginError");
+  if (loginError) {
+    loginError.hidden = true;
+    loginError.textContent = "";
+  }
   const username = document.getElementById("loginUsername").value.trim();
   const password = document.getElementById("loginPassword").value;
   if (!username || !password) {
@@ -783,6 +974,10 @@ async function doLogin(event) {
     await bootstrapAfterLogin();
     setStatus("登录成功");
   } catch (error) {
+    if (loginError) {
+      loginError.hidden = false;
+      loginError.textContent = "登录失败：" + error.message;
+    }
     setStatus("登录失败：" + error.message, "warn");
   }
 }
@@ -890,12 +1085,22 @@ function syncCurrentTransferChecks() {
   state.transfer.selectedIds.push(...Array.from(checked));
 }
 
+function updateTransferSelectionSummary() {
+  const currentFiles = (state.transfer.items || []).filter((x) => !x.is_dir);
+  const selectedInCurrent = currentFiles.filter((x) => state.transfer.selectedIds.includes(x.id)).length;
+  const summary = document.getElementById("transferSelectSummary");
+  if (summary) summary.textContent = `已选 ${state.transfer.selectedIds.length} 个，当前目录 ${selectedInCurrent}/${currentFiles.length}`;
+  const btn = document.getElementById("transferSelectAllBtn");
+  if (btn) btn.disabled = currentFiles.length === 0;
+}
+
 function renderTransferItemsModal() {
   const list = document.getElementById("transferItemsList");
   document.getElementById("transferItemsTitle").textContent =
     `${state.transfer.title || "请选择要转存的资源"}：${transferItemsPath()}`;
   document.getElementById("transferItemsBackBtn").disabled = state.transfer.stack.length <= 1;
   list.innerHTML = "";
+  updateTransferSelectionSummary();
   if (!state.transfer.items.length) {
     list.innerHTML = '<div class="dir-item">当前目录没有可选择资源</div>';
     return;
@@ -907,9 +1112,9 @@ function renderTransferItemsModal() {
     if (item.is_dir) {
       row.innerHTML = `
         <span class="transfer-item-name">📁 ${escapeHtml(item.name)}</span>
-        <button type="button" class="transfer-item-enter">进入</button>
+        <span class="transfer-item-hint">单击进入</span>
       `;
-      row.querySelector("button").onclick = async () => {
+      row.onclick = async () => {
         syncCurrentTransferChecks();
         list.innerHTML = '<div class="dir-item">加载中...</div>';
         try {
@@ -929,6 +1134,18 @@ function renderTransferItemsModal() {
           <span class="transfer-item-name">📄 ${escapeHtml(item.name)}${sizeText}</span>
         </label>
       `;
+      const checkbox = row.querySelector("input");
+      checkbox.onchange = () => {
+        syncCurrentTransferChecks();
+        row.classList.toggle("is-selected", checkbox.checked);
+        updateTransferSelectionSummary();
+      };
+      row.classList.toggle("is-selected", checkbox.checked);
+      row.onclick = (e) => {
+        if (e.target === checkbox) return;
+        checkbox.checked = !checkbox.checked;
+        checkbox.dispatchEvent(new Event("change"));
+      };
     }
     list.appendChild(row);
   });
@@ -953,6 +1170,66 @@ async function doTransferCommit(sourceUri, targetDirId, selectedIds, cloudType) 
   } catch (error) {
     setTransferToast("转存失败: " + error.message, "warn");
   }
+}
+
+function selectedRows() {
+  return state.filtered.filter((row) => state.selectedResultIds.has(resultId(row)));
+}
+
+async function batchTransferSelected() {
+  const rows = selectedRows();
+  if (!rows.length) {
+    setTransferToast("请先选择要转存的搜索结果", "warn");
+    return;
+  }
+  const checks = [];
+  for (const row of rows) {
+    const sourceUri = row.magnet || row.link;
+    if (!sourceUri) continue;
+    const check = await api("/tasks/offline/check", {
+      method: "POST",
+      body: JSON.stringify({ source_uri: sourceUri, cloud_type: row.cloud_type || "" }),
+    });
+    if (!check.supported || !check.configured) {
+      setTransferToast(`${row.title || "资源"}：${check.message || "不可转存"}`, "warn");
+      return;
+    }
+    checks.push({ row, check, provider: check.provider === "magnet" || check.provider === "ed2k" ? "115" : check.provider });
+  }
+  if (!checks.length) {
+    setTransferToast("所选结果没有可转存链接", "warn");
+    return;
+  }
+  const provider = checks[0].provider;
+  if (!checks.every((x) => x.provider === provider)) {
+    setTransferToast("批量转存暂只支持同一种目标网盘，请先筛选网盘类型", "warn");
+    return;
+  }
+  const last = getLastDir(provider);
+  const dirId = last?.id || checks[0].check.default_dir_id || "0";
+  const dirPath = last?.path || checks[0].check.default_dir_path || "/";
+  await openDirPicker(dirId, dirPath, provider, "", async (choice) => {
+    setLastDir(provider, choice);
+    let ok = 0;
+    for (const item of checks) {
+      const sourceUri = item.row.magnet || item.row.link;
+      try {
+        await api("/transfer/commit", {
+          method: "POST",
+          body: JSON.stringify({
+            source_uri: sourceUri,
+            target_dir_id: choice.id || "0",
+            selected_ids: [],
+            cloud_type: item.row.cloud_type || item.provider,
+          }),
+        });
+        ok += 1;
+      } catch (error) {
+        setTransferToast(`批量转存部分失败：${error.message}`, "warn");
+      }
+    }
+    setTransferToast(`批量转存已提交 ${ok}/${checks.length} 个任务`);
+  });
 }
 
 async function openTransferModal(row) {
@@ -1064,6 +1341,7 @@ function bindEvents() {
   };
   document.getElementById("refreshRecommendBtn").onclick = async () => {
     clearRecommendCache(state.recommendSource, state.recommendCategory);
+    state.detailCache.clear();
     await loadRecommend(true);
   };
 
@@ -1092,7 +1370,6 @@ function bindEvents() {
       document.getElementById("resultViewTabs").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
       btn.classList.add("active");
       state.resultView = btn.dataset.view;
-      state.renderedCount = 0;
       renderResourceList();
     };
   });
@@ -1105,7 +1382,12 @@ function bindEvents() {
     state.sortBy = e.target.value;
     applyFilters();
   };
-  document.getElementById("loadMoreBtn").onclick = renderResourceList;
+  document.getElementById("toggleResultSelectBtn").onclick = () => {
+    state.resultSelectMode = !state.resultSelectMode;
+    document.getElementById("toggleResultSelectBtn").textContent = state.resultSelectMode ? "退出选择" : "选择结果";
+    if (!state.resultSelectMode) state.selectedResultIds.clear();
+    renderResourceList();
+  };
 
   document.getElementById("settingsTabs").querySelectorAll("button").forEach((btn) => {
     btn.onclick = () => switchSettingsTab(btn.dataset.tab);
@@ -1113,21 +1395,28 @@ function bindEvents() {
 
   document.getElementById("settingsForm").onsubmit = saveSettings;
   document.getElementById("saveSettingsTop").onclick = saveSettings;
+  document.querySelectorAll(".btn-secret-toggle[data-secret-target]").forEach((btn) => {
+    btn.onclick = () => {
+      const input = document.getElementById(btn.dataset.secretTarget);
+      if (!input) return;
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      btn.textContent = show ? "隐藏" : "显示";
+    };
+  });
+  document.getElementById("logoutBtn").onclick = doLogout;
+  document.getElementById("showLogsBtn").onclick = async () => {
+    document.getElementById("logsModal").hidden = false;
+    await loadLogs();
+  };
+  document.getElementById("refreshLogsBtn").onclick = loadLogs;
+  document.getElementById("logLevelFilter").onchange = loadLogs;
+  document.getElementById("closeLogsBtn").onclick = () => {
+    document.getElementById("logsModal").hidden = true;
+  };
 
   document.querySelectorAll(".btn-test-provider").forEach((btn) => {
     btn.onclick = () => testProvider(btn.dataset.provider);
-  });
-
-  document.querySelectorAll(".btn-eye[data-toggle-target]").forEach((btn) => {
-    btn.onclick = () => {
-      const target = document.getElementById(btn.dataset.toggleTarget);
-      if (!target) return;
-      const visible = target.type === "password";
-      target.type = visible ? "text" : "password";
-      btn.classList.toggle("is-visible", visible);
-      btn.textContent = visible ? "🙈" : "👁";
-      btn.title = visible ? "隐藏明文" : "显示明文";
-    };
   });
 
   renderPansouCloudTypeSelect();
@@ -1154,6 +1443,15 @@ function bindEvents() {
     closeDirPicker();
   };
   document.getElementById("transferItemsCancelBtn").onclick = closeTransferItemsModal;
+  document.getElementById("transferSelectAllBtn").onclick = () => {
+    syncCurrentTransferChecks();
+    const currentFiles = (state.transfer.items || []).filter((x) => !x.is_dir);
+    const allSelected = currentFiles.length > 0 && currentFiles.every((x) => state.transfer.selectedIds.includes(x.id));
+    const currentIds = new Set(currentFiles.map((x) => x.id));
+    state.transfer.selectedIds = state.transfer.selectedIds.filter((id) => !currentIds.has(id));
+    if (!allSelected) state.transfer.selectedIds.push(...currentFiles.map((x) => x.id));
+    renderTransferItemsModal();
+  };
   document.getElementById("transferItemsBackBtn").onclick = async () => {
     if (state.transfer.stack.length <= 1) return;
     syncCurrentTransferChecks();
@@ -1178,6 +1476,7 @@ async function bootstrapAfterLogin() {
   await loadSettings();
   await loadRecommendCategories();
   await loadRecommend();
+  await loadAppInfo();
   switchSettingsTab("media");
   showPage(initialPage);
 }

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from hashlib import sha1
+
 import httpx
 
 from app.core.config import ProviderSettings
@@ -23,6 +26,21 @@ class ProwlarrAdapter:
             return self.settings.system_proxy_url
         return None
 
+    @staticmethod
+    def _parse_datetime(raw: object) -> datetime | None:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if dt.year <= 1971:
+            return None
+        return dt
+
     async def _resolve_magnet(self, client: httpx.AsyncClient, candidate: str) -> str | None:
         if not candidate or candidate.startswith("magnet:"):
             return candidate or None
@@ -33,9 +51,55 @@ class ProwlarrAdapter:
             location = resp.headers.get("location", "")
             if location.startswith("magnet:"):
                 return location
+            if resp.status_code in {301, 302, 303, 307, 308} and location:
+                resp = await client.get(location, follow_redirects=True)
+            elif resp.status_code < 400 and resp.content:
+                pass
+            else:
+                resp = await client.get(candidate, follow_redirects=True)
+            text = resp.text[:4096] if resp.content else ""
+            if text.startswith("magnet:"):
+                return text.strip()
+            if resp.content:
+                info_hash = self._torrent_info_hash(resp.content)
+                if info_hash:
+                    return f"magnet:?xt=urn:btih:{info_hash}"
         except Exception:  # noqa: BLE001
             return None
         return None
+
+    @staticmethod
+    def _torrent_info_hash(data: bytes) -> str | None:
+        key = b"4:info"
+        pos = data.find(key)
+        if pos < 0:
+            return None
+        start = pos + len(key)
+
+        def skip(i: int) -> int:
+            token = data[i : i + 1]
+            if token == b"i":
+                end = data.index(b"e", i)
+                return end + 1
+            if token == b"l":
+                i += 1
+                while data[i : i + 1] != b"e":
+                    i = skip(i)
+                return i + 1
+            if token == b"d":
+                i += 1
+                while data[i : i + 1] != b"e":
+                    i = skip(i)
+                    i = skip(i)
+                return i + 1
+            if token.isdigit():
+                colon = data.index(b":", i)
+                length = int(data[i:colon])
+                return colon + 1 + length
+            raise ValueError("invalid bencode")
+
+        end = skip(start)
+        return sha1(data[start:end]).hexdigest().upper()
 
     async def search(self, keyword: str, limit: int) -> list[SearchResultItem]:
         if self.settings.use_mock:
@@ -105,7 +169,11 @@ class ProwlarrAdapter:
                         if resolved:
                             magnet = resolved
 
-                    link = str(row.get("downloadUrl") or row.get("guidUrl") or row.get("infoUrl") or magnet or "")
+                    link = str(
+                        magnet
+                        if magnet and magnet.startswith("magnet:")
+                        else row.get("downloadUrl") or row.get("guidUrl") or row.get("infoUrl") or ""
+                    )
                     out.append(
                         SearchResultItem(
                             source="prowlarr",
@@ -114,6 +182,12 @@ class ProwlarrAdapter:
                             link=link,
                             magnet=magnet if magnet and magnet.startswith("magnet:") else None,
                             size=row.get("size"),
+                            publish_time=self._parse_datetime(
+                                row.get("publishDate")
+                                or row.get("publish_date")
+                                or row.get("indexerFlags")
+                                or row.get("added")
+                            ),
                             media_type=infer_media_type(row.get("title") or ""),
                             cloud_type="magnet",
                             score=7.5,

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>CloudMediaPilot</title>
     <link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
-    <link rel="stylesheet" href="/assets/app.css?v=20260412-5" />
+    <link rel="stylesheet" href="/assets/app.css?v=20260412-11" />
   </head>
   <body>
     <div class="layout">
@@ -22,6 +22,11 @@
       </aside>
 
       <main class="main">
+        <div class="topbar">
+          <span id="appVersion">CloudMediaPilot</span>
+          <button id="showLogsBtn" type="button">日志查看</button>
+          <button id="logoutBtn" type="button">退出登录</button>
+        </div>
         <section id="status" class="status" hidden></section>
         <section id="transferToast" class="transfer-toast" hidden></section>
 
@@ -94,14 +99,14 @@
                 <button class="active" data-view="list">列表</button>
                 <button data-view="poster">海报卡片</button>
               </div>
+              <button id="toggleResultSelectBtn" type="button">选择结果</button>
             </div>
           </div>
 
           <div id="resultSummary" class="result-summary-grid"></div>
+          <div id="searchBulkControls" class="bulk-controls" hidden></div>
           <div id="resourceList" class="resource-list"></div>
-          <div class="list-actions">
-            <button id="loadMoreBtn" hidden>加载更多</button>
-          </div>
+          <div id="resultPagination" class="pagination" hidden></div>
         </section>
 
         <section data-page="settings" class="page" hidden>
@@ -135,8 +140,8 @@
                   <label class="password-field">
                     <span>API Key</span>
                     <div class="password-wrap">
-                      <input id="tmdbApiKey" type="password" placeholder="留空=保持不变" />
-                      <button type="button" class="btn-eye" data-toggle-target="tmdbApiKey">👁</button>
+                      <input id="tmdbApiKey" type="password" />
+                      <button type="button" class="btn-secret-toggle" data-secret-target="tmdbApiKey">显示</button>
                     </div>
                     <small id="tmdbApiKeyHint" class="hint"></small>
                   </label>
@@ -154,7 +159,7 @@
                 </div>
                 <div class="form-grid">
                   <label><span>115 Base URL</span><input id="c115BaseUrl" /></label>
-                  <label class="password-field"><span>115 Cookie</span><div class="password-wrap"><input id="c115Cookie" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="c115Cookie">👁</button></div></label>
+                  <label class="password-field"><span>115 Cookie</span><div class="password-wrap"><input id="c115Cookie" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="c115Cookie">显示</button></div></label>
                 </div>
                 <small id="testResult-c115" class="test-result"></small>
               </article>
@@ -165,7 +170,7 @@
                   <button type="button" class="btn-test-provider" data-provider="quark">测试</button>
                 </div>
                 <div class="form-grid">
-                  <label class="password-field"><span>夸克 Cookie</span><div class="password-wrap"><input id="quarkCookie" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="quarkCookie">👁</button></div></label>
+                  <label class="password-field"><span>夸克 Cookie</span><div class="password-wrap"><input id="quarkCookie" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="quarkCookie">显示</button></div></label>
                 </div>
                 <small id="testResult-quark" class="test-result"></small>
               </article>
@@ -177,7 +182,7 @@
                 </div>
                 <div class="form-grid">
                   <label><span>天翼账号</span><input id="tianyiUsername" placeholder="手机号/邮箱" /></label>
-                  <label class="password-field"><span>天翼密码</span><div class="password-wrap"><input id="tianyiPassword" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="tianyiPassword">👁</button></div></label>
+                  <label class="password-field"><span>天翼密码</span><div class="password-wrap"><input id="tianyiPassword" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="tianyiPassword">显示</button></div></label>
                 </div>
                 <small id="testResult-tianyi" class="test-result"></small>
               </article>
@@ -189,7 +194,7 @@
                 </div>
                 <div class="form-grid">
                   <label><span>123 账号</span><input id="pan123Username" placeholder="手机号/邮箱" /></label>
-                  <label class="password-field"><span>123 密码</span><div class="password-wrap"><input id="pan123Password" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="pan123Password">👁</button></div></label>
+                  <label class="password-field"><span>123 密码</span><div class="password-wrap"><input id="pan123Password" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="pan123Password">显示</button></div></label>
                 </div>
                 <small id="testResult-pan123" class="test-result"></small>
               </article>
@@ -205,7 +210,7 @@
                   <label><span>API 地址</span><input id="pansouBaseUrl" /></label>
                   <label class="inline-toggles"><span>开关</span><div class="toggle-pack"><span>启用</span><input id="enablePansou" type="checkbox" class="toggle" /><span>代理</span><input id="pansouUseProxy" type="checkbox" class="toggle" /><span>认证</span><input id="pansouEnableAuth" type="checkbox" class="toggle" /></div></label>
                   <label><span>认证用户名</span><input id="pansouUsername" /></label>
-                  <label class="password-field"><span>认证密码</span><div class="password-wrap"><input id="pansouPassword" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="pansouPassword">👁</button></div></label>
+                  <label class="password-field"><span>认证密码</span><div class="password-wrap"><input id="pansouPassword" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="pansouPassword">显示</button></div></label>
                   <label><span>搜索路径</span><input id="pansouSearchPath" placeholder="/api/search" /></label>
                   <label><span>请求方式</span><select id="pansouSearchMethod"><option value="POST">POST</option><option value="GET">GET</option></select></label>
                   <label><span>数据来源</span><select id="pansouSource"><option value="all">全部</option><option value="tg">仅Telegram</option><option value="plugin">仅插件</option></select></label>
@@ -231,7 +236,7 @@
                 <div class="form-grid compact-grid">
                   <label><span>Prowlarr URL</span><input id="prowlarrBaseUrl" /></label>
                   <label class="inline-toggles"><span>开关</span><div class="toggle-pack"><span>启用</span><input id="enableProwlarr" type="checkbox" class="toggle" /><span>代理</span><input id="prowlarrUseProxy" type="checkbox" class="toggle" /></div></label>
-                  <label class="password-field"><span>Prowlarr API Key</span><div class="password-wrap"><input id="prowlarrApiKey" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="prowlarrApiKey">👁</button></div><small id="prowlarrApiKeyHint" class="hint"></small></label>
+                  <label class="password-field"><span>Prowlarr API Key</span><div class="password-wrap"><input id="prowlarrApiKey" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="prowlarrApiKey">显示</button></div><small id="prowlarrApiKeyHint" class="hint"></small></label>
                 </div>
                 <small id="testResult-prowlarr" class="test-result"></small>
               </article>
@@ -253,7 +258,7 @@
                 <h3>账号安全</h3>
                 <div class="form-grid">
                   <label><span>登录用户名</span><input id="systemUsername" placeholder="admin" /></label>
-                  <label class="password-field"><span>登录密码</span><div class="password-wrap"><input id="systemPassword" type="password" placeholder="留空=保持不变" /><button type="button" class="btn-eye" data-toggle-target="systemPassword">👁</button></div><small id="systemPasswordHint" class="hint"></small></label>
+                  <label class="password-field"><span>设置新密码</span><div class="password-wrap"><input id="systemPassword" type="password" placeholder="留空则不修改" /></div><small id="systemPasswordHint" class="hint"></small></label>
                 </div>
               </article>
             </section>
@@ -279,6 +284,10 @@
       <div class="modal-card dir-modal-card">
         <h3>选择转存资源</h3>
         <div id="transferItemsTitle" class="dir-picked-line"></div>
+        <div class="bulk-controls">
+          <button id="transferSelectAllBtn" type="button">全选当前目录</button>
+          <span id="transferSelectSummary"></span>
+        </div>
         <div id="transferItemsList" class="dir-picker-list"></div>
         <div class="modal-actions">
           <button id="transferItemsBackBtn" type="button">返回上级</button>
@@ -288,16 +297,29 @@
       </div>
     </div>
 
+    <div id="logsModal" class="modal" hidden>
+      <div class="modal-card logs-card">
+        <h3>应用日志</h3>
+        <div class="bulk-controls">
+          <label>级别 <select id="logLevelFilter"><option value="all">全部</option><option value="info">INFO+</option><option value="warning">WARN+</option><option value="error">ERROR</option></select></label>
+          <button id="refreshLogsBtn" type="button">刷新</button>
+          <button id="closeLogsBtn" type="button">关闭</button>
+        </div>
+        <div id="logsList" class="logs-list"></div>
+      </div>
+    </div>
+
     <div id="loginOverlay" class="login-overlay" hidden>
       <form id="loginForm" class="login-card">
         <h2>登录 CloudMediaPilot</h2>
         <p class="hint">默认：admin / admin</p>
         <label><span>用户名</span><input id="loginUsername" autocomplete="username" /></label>
-        <label><span>密码</span><input id="loginPassword" type="password" autocomplete="current-password" /></label>
+        <label><span>密码</span><div class="password-wrap"><input id="loginPassword" type="password" autocomplete="current-password" /><button type="button" class="btn-secret-toggle" data-secret-target="loginPassword">显示</button></div></label>
+        <small id="loginError" class="login-error" hidden></small>
         <button type="submit" class="btn-primary">登录</button>
       </form>
     </div>
 
-    <script src="/assets/app.js?v=20260412-5" type="module"></script>
+    <script src="/assets/app.js?v=20260412-11" type="module"></script>
   </body>
 </html>
