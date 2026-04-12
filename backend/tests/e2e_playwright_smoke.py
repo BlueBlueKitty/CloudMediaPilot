@@ -5,7 +5,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 
-def run(base_url: str = "http://127.0.0.1:8010") -> None:
+def run(base_url: str = "http://127.0.0.1:1315") -> None:
     out_dir = Path("/tmp")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)

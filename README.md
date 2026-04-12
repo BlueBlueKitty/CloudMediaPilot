@@ -1,138 +1,169 @@
 # CloudMediaPilot
 
-CloudMediaPilot 是一个影视检索与离线任务分发 Web 应用，包含：
+CloudMediaPilot 是一个影视推荐、资源搜索和网盘转存助手。后端基于 FastAPI，WebUI 内置在后端服务中，打开浏览器即可使用。
 
-- TMDB 影视搜索（海报卡片展示）
-- PanSou + Prowlarr 资源聚合搜索
-- 115 离线任务创建与状态追踪
-- WebUI 设置中心（TMDB / Prowlarr / PanSou / 115）
-- 配置持久化到单 config 目录（`config/.env`）
+主要能力：
 
----
+- TMDB / 豆瓣推荐与影视搜索
+- PanSou + Prowlarr 聚合资源搜索
+- 115 / 夸克分享资源逐级选择与转存
+- 115 磁力离线任务创建
+- WebUI 配置、连接测试、日志查看
 
-## 1. 技术栈
+默认访问地址：`http://localhost:1315/`
 
-- Backend: FastAPI
-- 配置存储: `config/.env`（由 WebUI 维护）
-- 前端: 原生 HTML/CSS/JS（内置于后端）
-- 容器化: Docker Compose
+默认登录账号：`admin`
 
----
+默认登录密码：`admin`
 
-## 2. 功能页面
+## 界面预览
 
-启动后访问 `http://localhost:8000/`：
+### 推荐页
 
-1. **搜索页**：TMDB 卡片式影视搜索
-2. **结果页**：资源表格展示 + 来源/类型/关键词筛选
-3. **任务页**：查看离线任务状态
-4. **设置页**：维护 TMDB / Prowlarr / PanSou / 115 配置并测试连接
+![推荐页](images/recommend.png)
 
-> 密钥类字段（API Key、Cookie）只会脱敏显示，不会明文回显。
+### 搜索页
 
----
+![搜索页](images/search.png)
 
-## 3. 本地运行
+### 设置页
 
-### 3.1 环境准备
+![设置页](images/settings.png)
 
-- Python >= 3.11
-- 建议先复制环境文件：
+## Docker 部署
+
+CloudMediaPilot 会在 `/app/config/.env` 不存在时自动生成配置文件，因此 Docker 部署时不需要提前复制 `.env`。
+
+### 方式一：docker run
 
 ```bash
-cp config/.env.example config/.env
+docker run -d \
+  --name cloudmediapilot \
+  -p 1315:1315 \
+  -e CONFIG_ENV_PATH=/app/config/.env \
+  -e SYSTEM_PASSWORD=admin \
+  -v "$PWD/cloudmediapilot/config:/app/config" \
+  -v "$PWD/cloudmediapilot/data:/app/data" \
+  bluebluekitty/cloudmediapilot:latest
 ```
 
-建议将 `config/.env.example` 复制到 `config/.env`。WebUI 保存设置后会写入该文件。
-默认登录账号密码为 `admin/admin`（可在 `config/.env` 中通过 `SYSTEM_USERNAME` / `SYSTEM_PASSWORD` 修改）。
+访问：`http://localhost:1315/`
 
-### 3.2 安装依赖
+### 方式二：docker compose
+
+不需要复制本项目文件。新建一个目录，例如 `cloudmediapilot`，在里面创建 `docker-compose.yml`：
+
+```yaml
+services:
+  backend:
+    image: bluebluekitty/cloudmediapilot:latest
+    container_name: cloudmediapilot-backend
+    environment:
+      CONFIG_ENV_PATH: /app/config/.env
+      SYSTEM_PASSWORD: admin
+    ports:
+      - "1315:1315"
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:1315/health')"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+```
+
+启动：
+
+```bash
+docker compose up -d
+```
+
+### 部署变量说明
+
+Docker 部署常用只需要关注这几项：
+
+| 项 | 含义 |
+| --- | --- |
+| `./config:/app/config` | 配置目录。首次启动会自动生成 `/app/config/.env`，WebUI 保存设置也会写入这里。请备份这个目录。 |
+| `./data:/app/data` | 数据目录。用于持久化运行期数据和后续扩展数据。 |
+| `SYSTEM_PASSWORD` | 首次自动生成配置时使用的 WebUI 初始登录密码。默认账号是 `admin`。 |
+
+## Docker 构建
+
+本地构建镜像：
+
+```bash
+docker build -f backend/Dockerfile -t cloudmediapilot:local .
+```
+
+运行本地镜像：
+
+```bash
+docker run -d \
+  --name cloudmediapilot \
+  -p 1315:1315 \
+  -e CONFIG_ENV_PATH=/app/config/.env \
+  -e SYSTEM_PASSWORD=admin \
+  -v "$PWD/config:/app/config" \
+  -v "$PWD/data:/app/data" \
+  cloudmediapilot:local
+```
+
+发布到 Docker Hub 可使用脚本：
+
+```bash
+export DOCKERHUB_TOKEN=你的DockerHubToken
+./scripts/dockerhub_publish.sh 0.1.0
+```
+
+脚本会构建并推送：
+
+- `bluebluekitty/cloudmediapilot:0.1.0`
+- `bluebluekitty/cloudmediapilot:latest`
+
+## 本地运行
+
+### 环境要求
+
+- Python 3.11+
+- 推荐使用虚拟环境
+
+### 安装依赖
 
 ```bash
 make install
 ```
 
-### 3.3 启动服务
+### 启动服务
 
 ```bash
 make run
 ```
 
-打开：`http://localhost:8000/`
-
----
-
-## 4. Docker 构建与运行
-
-### 4.1 构建并启动
+等价命令：
 
 ```bash
-docker compose up --build
+cd backend
+uvicorn app.main:app --reload --host 0.0.0.0 --port 1315
 ```
 
-### 4.2 持久化说明
+打开：`http://localhost:1315/`
 
-`docker-compose.yml` 已挂载：
+本地运行时如果 `config/.env` 不存在，程序也会自动生成。
 
-- `./data:/app/data`
-
-因此 WebUI 中保存的 `config/.env` 会持久化到宿主机目录。
-
----
-
-## 5. 验证命令
+## 常用开发命令
 
 ```bash
-make lint
-make typecheck
 make test
 make smoke-mock
 make verify-secrets
 ```
 
-说明：
+含义：
 
-- `smoke-mock`：用 mock 模式验证主流程可用
-- `verify-secrets`：检查仓库内潜在密钥泄露模式
-
----
-
-## 6. 配置使用说明（重点）
-
-### 6.1 在 WebUI 设置页配置以下项
-
-- TMDB: Base URL / API Key
-- Prowlarr: Base URL / API Key
-- PanSou: Base URL
-- 115: Base URL / Cookie / 默认目录 / 允许动作 / API 路径
-
-保存后点击“测试连接”可快速验证连通性。
-
-### 6.2 `config/.env` 配置边界
-
-- `config/.env`：运行参数 + 业务配置（TMDB / Prowlarr / PanSou / 115 / 登录）
-
----
-
-## 7. 常见问题
-
-### Q1: `make install` 失败（Multiple top-level packages discovered: ['app', 'data']）
-
-原因：setuptools 自动发现把 `data/` 误识别为包。  
-已在 `backend/pyproject.toml` 限制仅打包 `app*`，拉取最新代码后重新执行：
-
-```bash
-make install
-```
-
-### Q2: 明明保存了设置，重启容器后丢失
-
-请确认使用 `docker compose up`（而非临时容器），并确认 `./data:/app/data` 挂载存在。
-
----
-
-## 8. 安全说明
-
-- WebUI 返回的是脱敏密钥，不回显明文。
-- `.env` / `key.txt` 已在忽略规则中，避免进入镜像或版本库。
-- 请不要在 issue / 日志中粘贴真实 API Key 或 Cookie。
+- `make test`：运行后端测试
+- `make smoke-mock`：mock 模式冒烟测试
+- `make verify-secrets`：检查潜在敏感信息

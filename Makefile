@@ -13,7 +13,7 @@ typecheck:
 	cd backend && mypy app
 
 run:
-	cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port 1315
 
 smoke-mock:
 	CMP_USE_MOCK=true python infra/scripts/smoke.py mock

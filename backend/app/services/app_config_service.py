@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
@@ -122,7 +123,11 @@ class AppConfigStore:
         self._lock = RLock()
         self.env_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.env_path.exists():
-            self._write_env(self._to_env_map(AppConfig()))
+            cfg = AppConfig(system_username=os.getenv("SYSTEM_USERNAME", "admin"))
+            initial_password = os.getenv("SYSTEM_PASSWORD", "admin").strip()
+            if initial_password:
+                cfg.system_password_hash = hash_password(initial_password)
+            self._write_env(self._to_env_map(cfg))
 
     def _read_env(self) -> dict[str, str]:
         out: dict[str, str] = {}
