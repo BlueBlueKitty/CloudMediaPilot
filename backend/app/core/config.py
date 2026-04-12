@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -10,9 +11,15 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 15.0
 
 
 class Settings(BaseSettings):
-    _root_dir = Path(__file__).resolve().parents[3]
+    _source_path = Path(__file__).resolve()
+    _root_dir = Path(
+        os.getenv(
+            "CMP_ROOT_DIR",
+            "/app" if str(_source_path).startswith("/app/app/") else str(_source_path.parents[3]),
+        )
+    )
     _config_dir = _root_dir / "config"
-    _config_env = _config_dir / ".env"
+    _config_env = Path(os.getenv("CONFIG_ENV_PATH", str(_config_dir / ".env")))
     model_config = SettingsConfigDict(
         env_file=(str(_config_env),),
         env_file_encoding="utf-8",
