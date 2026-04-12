@@ -210,7 +210,7 @@ function setVisiblePage(pageId) {
 function showPage(pageId) {
   setVisiblePage(pageId);
   if (pageId === "recommend") {
-    loadRecommend().catch((error) => setStatus("加载推荐失败：" + error.message, "warn"));
+    loadRecommend(true).catch((error) => setStatus("加载推荐失败：" + error.message, "warn"));
   }
   history.replaceState(null, "", "#" + pageId);
 }
@@ -893,11 +893,13 @@ async function saveSettings(event) {
   if (tianyiPassword && !isMaskedSecret(tianyiPassword)) payload.tianyi_password = tianyiPassword;
   if (pan123Password && !isMaskedSecret(pan123Password)) payload.pan123_password = pan123Password;
 
-  await api("/settings", { method: "PUT", body: JSON.stringify(payload) });
-  await loadSettings();
-  state.recommendSearchMode = false;
-  await loadRecommend();
-  setStatus("设置已保存");
+  try {
+    await api("/settings", { method: "PUT", body: JSON.stringify(payload) });
+    await loadSettings();
+    setStatus("设置已保存");
+  } catch (error) {
+    setStatus(`保存设置失败：${error.message}`, "warn");
+  }
 }
 
 async function testProvider(provider) {
@@ -1499,7 +1501,6 @@ async function bootstrapAfterLogin() {
   const initialPage = location.hash.replace("#", "") || "recommend";
   await loadSettings();
   await loadRecommendCategories();
-  await loadRecommend();
   await loadAppInfo();
   switchSettingsTab("media");
   showPage(initialPage);

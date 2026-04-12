@@ -1,7 +1,9 @@
 .PHONY: install test lint typecheck run smoke-mock smoke-real-connectivity smoke-real-action verify-secrets
 
+PYTHON := backend/.venv/bin/python
+
 install:
-	cd backend && python -m pip install -e '.[dev]'
+	cd backend && .venv/bin/python -m pip install -e '.[dev]'
 
 test:
 	cd backend && pytest -q
@@ -16,13 +18,13 @@ run:
 	cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port 1315
 
 smoke-mock:
-	CMP_USE_MOCK=true python infra/scripts/smoke.py mock
+	CMP_USE_MOCK=true $(PYTHON) infra/scripts/smoke.py mock
 
 smoke-real-connectivity:
-	CMP_USE_MOCK=false python infra/scripts/smoke.py connectivity
+	CMP_USE_MOCK=false $(PYTHON) infra/scripts/smoke.py connectivity
 
 smoke-real-action:
-	CMP_USE_MOCK=false python infra/scripts/smoke.py action
+	CMP_USE_MOCK=false $(PYTHON) infra/scripts/smoke.py action
 
 verify-secrets:
-	python infra/scripts/verify_secrets.py
+	$(PYTHON) infra/scripts/verify_secrets.py

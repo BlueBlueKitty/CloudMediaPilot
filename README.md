@@ -37,6 +37,8 @@ docker run -d \
   -p 1315:1315 \
   -e SYSTEM_USERNAME=admin \
   -e SYSTEM_PASSWORD=admin \
+  -e HTTP_PROXY=http://127.0.0.1:7890 \
+  -e HTTPS_PROXY=http://127.0.0.1:7890\
   -v "$PWD/cloudmediapilot/config:/app/config" \
   -v "$PWD/cloudmediapilot/data:/app/data" \
   bluebluekitty/cloudmediapilot:latest
@@ -53,6 +55,8 @@ services:
     environment:
       SYSTEM_USERNAME: admin
       SYSTEM_PASSWORD: admin
+      HTTP_PROXY: http://127.0.0.1:7890
+      HTTPS_PROXY: http://127.0.0.1:7890
     ports:
       - "1315:1315"
     volumes:
@@ -79,6 +83,7 @@ Docker 部署常用只需要关注这几项：
 | `./data:/app/data` | 数据目录。用于持久化运行期数据和后续扩展数据。 |
 | `SYSTEM_USERNAME` | 首次自动生成配置时使用的 WebUI 登录用户名，默认 `admin`。 |
 | `SYSTEM_PASSWORD` | 首次自动生成配置时使用的 WebUI 初始登录密码，默认 `admin`。 |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 容器内应用访问外网时使用的系统代理（推荐同时设置）。 |
 
 ## Docker 构建
 
@@ -96,6 +101,8 @@ docker run -d \
   -p 1315:1315 \
   -e SYSTEM_USERNAME=admin \
   -e SYSTEM_PASSWORD=admin \
+  -e HTTP_PROXY=http://192.168.31.234:20171 \
+  -e HTTPS_PROXY=http://192.168.31.234:20171 \
   -v "$PWD/config:/app/config" \
   -v "$PWD/data:/app/data" \
   cloudmediapilot:local

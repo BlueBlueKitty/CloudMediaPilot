@@ -3,10 +3,20 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: localhost,127.0.0.1,::1
     container_name: cloudmediapilot
     environment:
       SYSTEM_USERNAME: ${SYSTEM_USERNAME:-admin}
       SYSTEM_PASSWORD: ${SYSTEM_PASSWORD:-admin}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,::1
+      http_proxy: ${HTTP_PROXY:-}
+      https_proxy: ${HTTPS_PROXY:-}
+      no_proxy: localhost,127.0.0.1,::1
     ports:
       - "1315:1315"
     volumes:

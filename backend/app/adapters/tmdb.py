@@ -15,13 +15,16 @@ class TMDBAdapter:
         self.settings = settings
 
     def _proxy(self) -> str | None:
-        if (
-            self.settings.tmdb_use_proxy
-            and self.settings.system_proxy_enabled
-            and self.settings.system_proxy_url
-        ):
+        if not self.settings.tmdb_use_proxy:
+            return None
+        if self.settings.system_proxy_enabled and self.settings.system_proxy_url:
             return self.settings.system_proxy_url
         return None
+
+    def _trust_env(self) -> bool:
+        # Default path: use runtime/system proxy env.
+        # Opt-in TMDB proxy path: only use configured proxy URL.
+        return not self.settings.tmdb_use_proxy
 
     def _base_urls(self) -> list[str]:
         base = self.settings.tmdb_base_url.rstrip("/")
@@ -92,7 +95,7 @@ class TMDBAdapter:
                 timeout=self.settings.request_timeout_seconds,
                 proxy=self._proxy(),
                 follow_redirects=True,
-                trust_env=False,
+                trust_env=self._trust_env(),
             ) as client:
                 for page in range(1, max_page + 1):
                     params = {
@@ -219,7 +222,7 @@ class TMDBAdapter:
                 timeout=self.settings.request_timeout_seconds,
                 proxy=self._proxy(),
                 follow_redirects=True,
-                trust_env=False,
+                trust_env=self._trust_env(),
             ) as client:
                 for media in media_candidates:
                     try:
@@ -281,7 +284,7 @@ class TMDBAdapter:
                 timeout=self.settings.request_timeout_seconds,
                 proxy=self._proxy(),
                 follow_redirects=True,
-                trust_env=False,
+                trust_env=self._trust_env(),
             ) as client:
                 await self._get_json(client, "/configuration", params)
             return True, "http_200"
@@ -302,7 +305,7 @@ class TMDBAdapter:
             timeout=self.settings.request_timeout_seconds,
             proxy=self._proxy(),
             follow_redirects=True,
-            trust_env=False,
+            trust_env=self._trust_env(),
         ) as client:
             for page in range(1, max_page + 1):
                 req_params = dict(params)
