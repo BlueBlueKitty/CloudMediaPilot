@@ -32,6 +32,8 @@ npm-debug.log*
 playwright-report/
 test-results/
 *.png
+!images/
+!images/*.png
 *.log
 
 AGENTS.md
