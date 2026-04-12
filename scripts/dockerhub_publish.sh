@@ -9,7 +9,7 @@ CONTEXT="${CONTEXT:-.}"
 
 if [[ -z "$VERSION" ]]; then
   echo "用法: $0 <version>" >&2
-  echo "示例: $0 0.1.0" >&2
+  echo "示例: $0 0.1.1" >&2
   exit 1
 fi
 

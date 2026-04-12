@@ -126,6 +126,16 @@ export DOCKERHUB_TOKEN=你的DockerHubToken
 
 - Python 3.11+
 - 推荐使用虚拟环境
+- 可选：`uv`（用于快速创建虚拟环境）
+
+### 使用 uv 创建虚拟环境（推荐）
+
+```bash
+cd backend
+uv venv --python 3.11
+source .venv/bin/activate
+cd ..
+```
 
 ### 安装依赖
 
@@ -140,6 +150,13 @@ make run
 ```
 
 打开：`http://localhost:1315/`
+
+如需显式指定 Python 解释器（例如未激活虚拟环境时）：
+
+```bash
+make install PYTHON=backend/.venv/bin/python
+make run PYTHON=backend/.venv/bin/python
+```
 
 ## 常用开发命令
 
