@@ -7,8 +7,10 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.core.errors import AppError
+from app.services.log_service import configure_logging
 
 logger = logging.getLogger(__name__)
+configure_logging()
 
 app = FastAPI(title="CloudMediaPilot API", version="0.1.0")
 app.include_router(router)
