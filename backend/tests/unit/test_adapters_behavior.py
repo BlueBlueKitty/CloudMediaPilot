@@ -269,6 +269,101 @@ async def test_c115_magnet_falls_back_to_add_task_url_when_bt_decode_fails(
         "0",
     )
     assert task_id == "task-123"
-    assert len(fake.calls) == 2
+    assert len(fake.calls) >= 2
     assert "ac=add_task_bt" in fake.calls[0]
-    assert "ac=add_task_url" in fake.calls[1]
+    assert any("ac=add_task_url" in call for call in fake.calls)
+
+
+@pytest.mark.asyncio
+async def test_c115_add_task_url_falls_back_when_first_endpoint_decode_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RespText:
+        status_code = 200
+        text = "decode fail!"
+        content = b"decode fail!"
+
+        def json(self):  # type: ignore[no-untyped-def]
+            raise ValueError("non-json")
+
+    class _RespJson:
+        status_code = 200
+        text = '{"state": true, "task_id": "task-456"}'
+        content = b'{"state": true, "task_id": "task-456"}'
+
+        def json(self):  # type: ignore[no-untyped-def]
+            return {"state": True, "task_id": "task-456"}
+
+    class _Client:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def __aenter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return None
+
+        async def post(self, url, headers=None, data=None):  # type: ignore[no-untyped-def]
+            self.calls.append(url)
+            if "ac=add_task_bt" in url:
+                return _RespJson()
+            if "lixianssp/?ac=add_task_url" in url:
+                return _RespText()
+            if "web/lixian/?ct=lixian&ac=add_task_url" in url:
+                return _RespJson()
+            return _RespText()
+
+    fake = _Client()
+    monkeypatch.setattr("app.adapters.c115.httpx.AsyncClient", lambda **kwargs: fake)
+    settings = _settings()
+    settings.c115_cookie = "cookie"
+    settings.c115_offline_add_path = "/lixianssp/?ac=add_task_url"
+    task_id = await C115Adapter(settings).create_offline_task(
+        "https://example.com/file.torrent",
+        "0",
+    )
+    assert task_id == "task-456"
+    assert len(fake.calls) >= 2
+    assert "lixianssp/?ac=add_task_url" in fake.calls[0]
+    assert "web/lixian/?ct=lixian&ac=add_task_url" in fake.calls[1]
+
+
+@pytest.mark.asyncio
+async def test_c115_add_task_url_payload_uses_wp_path_id_without_savepath(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RespJson:
+        status_code = 200
+        text = '{"state": true, "task_id": "task-789"}'
+        content = b'{"state": true, "task_id": "task-789"}'
+
+        def json(self):  # type: ignore[no-untyped-def]
+            return {"state": True, "task_id": "task-789"}
+
+    class _Client:
+        def __init__(self) -> None:
+            self.last_data = None
+
+        async def __aenter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return None
+
+        async def post(self, url, headers=None, data=None):  # type: ignore[no-untyped-def]
+            self.last_data = data
+            return _RespJson()
+
+    fake = _Client()
+    monkeypatch.setattr("app.adapters.c115.httpx.AsyncClient", lambda **kwargs: fake)
+    settings = _settings()
+    settings.c115_cookie = "cookie"
+    task_id = await C115Adapter(settings).create_offline_task(
+        "https://example.com/file.torrent",
+        "3322179626497351548",
+    )
+    assert task_id == "task-789"
+    assert isinstance(fake.last_data, dict)
+    assert fake.last_data.get("wp_path_id") == "3322179626497351548"
+    assert "savepath" not in fake.last_data

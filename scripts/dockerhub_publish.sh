@@ -25,7 +25,12 @@ IMAGE="${DOCKERHUB_USER}/${IMAGE_NAME}"
 # printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
 
 echo "[2/4] 构建镜像: ${IMAGE}:${VERSION}"
-docker build -f "$DOCKERFILE" -t "${IMAGE}:${VERSION}" -t "${IMAGE}:latest" "$CONTEXT"
+docker build \
+  --build-arg APP_VERSION="${VERSION}" \
+  -f "$DOCKERFILE" \
+  -t "${IMAGE}:${VERSION}" \
+  -t "${IMAGE}:latest" \
+  "$CONTEXT"
 
 echo "[3/4] 推送版本标签: ${IMAGE}:${VERSION}"
 docker push "${IMAGE}:${VERSION}"

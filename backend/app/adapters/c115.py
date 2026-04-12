@@ -125,6 +125,42 @@ class C115Adapter:
                 400,
             )
 
+    def _offline_url(self, path: str) -> str:
+        raw = (path or "").strip()
+        if raw.startswith("http://") or raw.startswith("https://"):
+            return raw
+        base = self.settings.c115_base_url.rstrip("/")
+        return f"{base}{raw}"
+
+    def _offline_add_url_candidates(self) -> list[str]:
+        # Some 115 nodes behave differently across offline endpoints.
+        # Keep configured path first, then try known-compatible fallbacks.
+        candidates = [
+            self.settings.c115_offline_add_path,
+            "/web/lixian/?ct=lixian&ac=add_task_url",
+            "/web/lixian/?ac=add_task_url",
+            "/lixianssp/?ac=add_task_url",
+        ]
+        out: list[str] = []
+        for path in candidates:
+            url = self._offline_url(path)
+            if url not in out:
+                out.append(url)
+        return out
+
+    def _offline_add_bt_candidates(self) -> list[str]:
+        candidates = [
+            "/lixianssp/?ac=add_task_bt",
+            "/web/lixian/?ct=lixian&ac=add_task_bt",
+            "/web/lixian/?ac=add_task_bt",
+        ]
+        out: list[str] = []
+        for path in candidates:
+            url = self._offline_url(path)
+            if url not in out:
+                out.append(url)
+        return out
+
     @staticmethod
     def _parse_share_link(source_uri: str) -> tuple[str, str]:
         parsed = urlparse(source_uri)
@@ -159,31 +195,36 @@ class C115Adapter:
         headers = {
             "Cookie": self.settings.c115_cookie,
             "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json, text/plain, */*",
+            "X-Requested-With": "XMLHttpRequest",
         }
         info_hash = self._extract_magnet_hash(source_uri)
         attempts: list[tuple[str, dict[str, str], str]] = []
         if info_hash:
+            for bt_url in self._offline_add_bt_candidates():
+                attempts.append(
+                    (
+                        bt_url,
+                        {
+                            "info_hash": info_hash,
+                            "wp_path_id": target_dir_id,
+                        },
+                        "add_task_bt",
+                    )
+                )
+        for add_url in self._offline_add_url_candidates():
             attempts.append(
                 (
-                    f"{self.settings.c115_base_url}/lixianssp/?ac=add_task_bt",
+                    add_url,
                     {
-                        "info_hash": info_hash,
+                        "url": source_uri,
+                        # 115 expects folder path text in savepath; passing dir-id can cause
+                        # odd numeric folder naming. Use wp_path_id only.
                         "wp_path_id": target_dir_id,
                     },
-                    "add_task_bt",
+                    "add_task_url",
                 )
             )
-        attempts.append(
-            (
-                f"{self.settings.c115_base_url}{self.settings.c115_offline_add_path}",
-                {
-                    "url": source_uri,
-                    "savepath": target_dir_id,
-                    "wp_path_id": target_dir_id,
-                },
-                "add_task_url",
-            )
-        )
         try:
             async with httpx.AsyncClient(
                 timeout=self.settings.request_timeout_seconds,
@@ -191,31 +232,34 @@ class C115Adapter:
                 trust_env=False,
             ) as client:
                 last_error: Exception | None = None
-                for url, payload, mode in attempts:
+                for idx, (url, payload, mode) in enumerate(attempts):
+                    has_next = idx < len(attempts) - 1
                     resp = await client.post(url, headers=headers, data=payload)
                     try:
                         data = self._json_or_error(resp)
                     except ProviderError as exc:
-                        # 某些115节点对 add_task_bt 会返回 "decode fail!" 纯文本；回退 add_task_url。
-                        if (
-                            mode == "add_task_bt"
-                            and "decode fail" in str(exc.message).lower()
-                            and len(attempts) > 1
-                        ):
-                            logger.warning("115_add_task_bt_decode_fail_fallback_to_url")
+                        # Some nodes return plain "decode fail!" for certain endpoints.
+                        # Retry next known endpoint before failing.
+                        if has_next and "decode fail" in str(exc.message).lower():
+                            logger.warning("115_add_task_decode_fail_fallback mode=%s url=%s", mode, url)
                             last_error = exc
                             continue
                         raise
                     if resp.status_code == 401 or data.get("errno") in {99, 911, 20004}:
                         raise AuthError("C115_AUTH_INVALID", "115 cookie invalid or expired", 401)
                     if data.get("state") is False:
-                        if mode == "add_task_bt" and len(attempts) > 1:
+                        if has_next:
                             last_error = ProviderError(
                                 "C115_UPSTREAM_ERROR",
-                                f"115 bt error: {data.get('error_msg') or data.get('error')}",
+                                f"115 add task error: {data.get('error_msg') or data.get('error')}",
                                 502,
                             )
-                            logger.warning("115_add_task_bt_failed_fallback_to_url error=%s", last_error)
+                            logger.warning(
+                                "115_add_task_failed_fallback mode=%s url=%s error=%s",
+                                mode,
+                                url,
+                                last_error,
+                            )
                             continue
                         raise ProviderError(
                             "C115_UPSTREAM_ERROR",

@@ -68,6 +68,8 @@ services:
 启动：
 
 ```bash
+# 可选：用于页面版本号显示，默认 0.1.0
+export APP_VERSION=0.1.3
 docker compose up -d
 ```
 
@@ -90,7 +92,7 @@ Docker 部署常用只需要关注这几项：
 本地构建镜像：
 
 ```bash
-docker build -f backend/Dockerfile -t cloudmediapilot:local .
+docker build --build-arg APP_VERSION=0.1.3 -f backend/Dockerfile -t cloudmediapilot:local .
 ```
 
 运行本地镜像：

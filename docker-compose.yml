@@ -7,6 +7,7 @@ services:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: localhost,127.0.0.1,::1
+        APP_VERSION: ${APP_VERSION:-0.1.0}
     container_name: cloudmediapilot
     environment:
       SYSTEM_USERNAME: ${SYSTEM_USERNAME:-admin}
@@ -17,6 +18,7 @@ services:
       http_proxy: ${HTTP_PROXY:-}
       https_proxy: ${HTTPS_PROXY:-}
       no_proxy: localhost,127.0.0.1,::1
+      APP_VERSION: ${APP_VERSION:-0.1.0}
     ports:
       - "1315:1315"
     volumes:

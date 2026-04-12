@@ -1,3 +1,5 @@
+from importlib import metadata
+import os
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
@@ -63,6 +65,16 @@ _SESSION_COOKIE = "cmp_session"
 
 class _CheckableAdapter(Protocol):
     async def check(self) -> tuple[bool, str]: ...
+
+
+def _app_version() -> str:
+    env_version = os.getenv("APP_VERSION", "").strip()
+    if env_version:
+        return env_version
+    try:
+        return metadata.version("cloudmediapilot-backend")
+    except metadata.PackageNotFoundError:
+        return "0.1.0"
 
 
 def _require_auth(request: Request, store: AppConfigStore = Depends(get_app_config_store)) -> str:
@@ -478,7 +490,7 @@ async def update_app_settings(
 
 @router.get("/app/info")
 async def app_info(_: str = Depends(_require_auth)) -> dict:
-    return {"name": "CloudMediaPilot", "version": "0.1.0"}
+    return {"name": "CloudMediaPilot", "version": _app_version()}
 
 
 @router.get("/logs")
