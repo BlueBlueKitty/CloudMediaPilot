@@ -198,13 +198,17 @@ function cloudTypeName(value) {
   return map[value] || "其他";
 }
 
-function showPage(pageId) {
+function setVisiblePage(pageId) {
   document.querySelectorAll("section[data-page]").forEach((el) => {
     el.hidden = el.dataset.page !== pageId;
   });
   nav.querySelectorAll("button").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.page === pageId);
   });
+}
+
+function showPage(pageId) {
+  setVisiblePage(pageId);
   if (pageId === "recommend") {
     loadRecommend().catch((error) => setStatus("加载推荐失败：" + error.message, "warn"));
   }
@@ -269,7 +273,14 @@ async function loadRecommendDetail(item, card) {
     return;
   }
   try {
-    const data = await api(`/recommend/detail?title=${encodeURIComponent(item.title)}`);
+    let data = {};
+    if (state.recommendSource === "tmdb" && Number(item.tmdb_id) > 0) {
+      data = await api(
+        `/recommend/detail/by-id?tmdb_id=${encodeURIComponent(item.tmdb_id)}&media_type=${encodeURIComponent(item.media_type || "")}`
+      );
+    } else {
+      data = await api(`/recommend/detail?title=${encodeURIComponent(item.title)}`);
+    }
     const parts = [];
     if (data.year) parts.push(String(data.year));
     if (data.country) parts.push(String(data.country));
@@ -287,9 +298,10 @@ async function loadRecommendDetail(item, card) {
 }
 
 function prefetchRecommendDetails(items) {
-  const queue = items.filter((item) => item.title && !state.detailCache.has(item.title)).slice(0, 36);
+  if (state.recommendSource !== "tmdb") return;
+  const queue = items.filter((item) => item.title && !state.detailCache.has(item.title)).slice(0, 12);
   let index = 0;
-  const workers = Array.from({ length: 6 }, async () => {
+  const workers = Array.from({ length: 3 }, async () => {
     while (index < queue.length) {
       const item = queue[index++];
       const card = document.querySelector(`.trend-card[data-title="${CSS.escape(item.title)}"]`);
@@ -890,11 +902,14 @@ async function saveSettings(event) {
 
 async function testProvider(provider) {
   const resultEl = document.getElementById(`testResult-${provider}`);
+  const btn = document.querySelector(`.btn-test-provider[data-provider="${provider}"]`);
   const writeResult = (text, level = "ok") => {
     if (!resultEl) return;
     resultEl.textContent = text;
     resultEl.className = "test-result " + (level === "warn" ? "warn" : "ok");
   };
+  writeResult("正在测试...");
+  setButtonLoading(btn, true);
   try {
     const data = await api("/settings/test", {
       method: "POST",
@@ -911,6 +926,8 @@ async function testProvider(provider) {
     );
   } catch (error) {
     writeResult(`测试失败：${error.message}`, "warn");
+  } finally {
+    setButtonLoading(btn, false);
   }
 }
 
@@ -1075,23 +1092,20 @@ function transferItemsPath() {
 }
 
 function syncCurrentTransferChecks() {
-  const checked = new Set(
+  state.transfer.selectedIds = Array.from(
     Array.from(document.querySelectorAll("#transferItemsList input[type='checkbox']:checked"))
       .map((el) => el.getAttribute("data-id") || "")
       .filter(Boolean)
   );
-  const visibleFileIds = new Set((state.transfer.items || []).filter((x) => !x.is_dir).map((x) => x.id));
-  state.transfer.selectedIds = state.transfer.selectedIds.filter((id) => !visibleFileIds.has(id));
-  state.transfer.selectedIds.push(...Array.from(checked));
 }
 
 function updateTransferSelectionSummary() {
-  const currentFiles = (state.transfer.items || []).filter((x) => !x.is_dir);
-  const selectedInCurrent = currentFiles.filter((x) => state.transfer.selectedIds.includes(x.id)).length;
+  const currentItems = state.transfer.items || [];
+  const selectedInCurrent = currentItems.filter((x) => state.transfer.selectedIds.includes(x.id)).length;
   const summary = document.getElementById("transferSelectSummary");
-  if (summary) summary.textContent = `已选 ${state.transfer.selectedIds.length} 个，当前目录 ${selectedInCurrent}/${currentFiles.length}`;
+  if (summary) summary.textContent = `已选 ${state.transfer.selectedIds.length} 个，当前目录 ${selectedInCurrent}/${currentItems.length}`;
   const btn = document.getElementById("transferSelectAllBtn");
-  if (btn) btn.disabled = currentFiles.length === 0;
+  if (btn) btn.disabled = currentItems.length === 0;
 }
 
 function renderTransferItemsModal() {
@@ -1109,30 +1123,11 @@ function renderTransferItemsModal() {
     const row = document.createElement("div");
     row.className = "dir-item transfer-item-row";
     const sizeText = item.size ? ` (${Math.round(item.size / 1024 / 1024)} MB)` : "";
+    const checked = state.transfer.selectedIds.includes(item.id) ? "checked" : "";
     if (item.is_dir) {
       row.innerHTML = `
+        <input type="checkbox" data-id="${escapeHtml(item.id)}" ${checked} />
         <span class="transfer-item-name">📁 ${escapeHtml(item.name)}</span>
-        <span class="transfer-item-hint">单击进入</span>
-      `;
-      row.onclick = async () => {
-        syncCurrentTransferChecks();
-        list.innerHTML = '<div class="dir-item">加载中...</div>';
-        try {
-          const data = await loadTransferItems(item.id);
-          state.transfer.items = data.items || [];
-          state.transfer.stack.push({ id: item.id, name: item.name || item.id });
-          renderTransferItemsModal();
-        } catch (error) {
-          list.innerHTML = `<div class="dir-item">加载失败：${escapeHtml(error.message)}</div>`;
-        }
-      };
-    } else {
-      const checked = state.transfer.selectedIds.includes(item.id) ? "checked" : "";
-      row.innerHTML = `
-        <label>
-          <input type="checkbox" data-id="${escapeHtml(item.id)}" ${checked} />
-          <span class="transfer-item-name">📄 ${escapeHtml(item.name)}${sizeText}</span>
-        </label>
       `;
       const checkbox = row.querySelector("input");
       checkbox.onchange = () => {
@@ -1140,6 +1135,34 @@ function renderTransferItemsModal() {
         row.classList.toggle("is-selected", checkbox.checked);
         updateTransferSelectionSummary();
       };
+      checkbox.onclick = (e) => e.stopPropagation();
+      row.onclick = async (e) => {
+        if (e.target === checkbox) return;
+        syncCurrentTransferChecks();
+        list.innerHTML = '<div class="dir-item">加载中...</div>';
+        try {
+          const data = await loadTransferItems(item.id);
+          state.transfer.items = data.items || [];
+          state.transfer.stack.push({ id: item.id, name: item.name || item.id });
+          state.transfer.selectedIds = (state.transfer.items || []).map((x) => x.id);
+          renderTransferItemsModal();
+        } catch (error) {
+          list.innerHTML = `<div class="dir-item">加载失败：${escapeHtml(error.message)}</div>`;
+        }
+      };
+      row.classList.toggle("is-selected", checkbox.checked);
+    } else {
+      row.innerHTML = `
+        <input type="checkbox" data-id="${escapeHtml(item.id)}" ${checked} />
+        <span class="transfer-item-name">📄 ${escapeHtml(item.name)}${sizeText}</span>
+      `;
+      const checkbox = row.querySelector("input");
+      checkbox.onchange = () => {
+        syncCurrentTransferChecks();
+        row.classList.toggle("is-selected", checkbox.checked);
+        updateTransferSelectionSummary();
+      };
+      checkbox.onclick = (e) => e.stopPropagation();
       row.classList.toggle("is-selected", checkbox.checked);
       row.onclick = (e) => {
         if (e.target === checkbox) return;
@@ -1257,7 +1280,7 @@ async function openTransferModal(row) {
     state.transfer.sourceUri = sourceUri;
     state.transfer.provider = provider;
     state.transfer.items = prepared.items || [];
-    state.transfer.selectedIds = (prepared.items || []).filter((x) => !x.is_dir).map((x) => x.id);
+    state.transfer.selectedIds = (state.transfer.items || []).map((x) => x.id);
     state.transfer.title = prepared.title || "选择资源";
     state.transfer.stack = [{ id: "", name: "全部资源" }];
     state.transfer.defaultDirId = prepared.default_dir_id || "0";
@@ -1445,11 +1468,11 @@ function bindEvents() {
   document.getElementById("transferItemsCancelBtn").onclick = closeTransferItemsModal;
   document.getElementById("transferSelectAllBtn").onclick = () => {
     syncCurrentTransferChecks();
-    const currentFiles = (state.transfer.items || []).filter((x) => !x.is_dir);
-    const allSelected = currentFiles.length > 0 && currentFiles.every((x) => state.transfer.selectedIds.includes(x.id));
-    const currentIds = new Set(currentFiles.map((x) => x.id));
+    const currentItems = state.transfer.items || [];
+    const allSelected = currentItems.length > 0 && currentItems.every((x) => state.transfer.selectedIds.includes(x.id));
+    const currentIds = new Set(currentItems.map((x) => x.id));
     state.transfer.selectedIds = state.transfer.selectedIds.filter((id) => !currentIds.has(id));
-    if (!allSelected) state.transfer.selectedIds.push(...currentFiles.map((x) => x.id));
+    if (!allSelected) state.transfer.selectedIds.push(...currentItems.map((x) => x.id));
     renderTransferItemsModal();
   };
   document.getElementById("transferItemsBackBtn").onclick = async () => {
@@ -1462,6 +1485,7 @@ function bindEvents() {
     try {
       const data = await loadTransferItems(parent.id || "");
       state.transfer.items = data.items || [];
+      state.transfer.selectedIds = (state.transfer.items || []).map((x) => x.id);
       renderTransferItemsModal();
     } catch (error) {
       list.innerHTML = `<div class="dir-item">加载失败：${escapeHtml(error.message)}</div>`;
@@ -1483,6 +1507,8 @@ async function bootstrapAfterLogin() {
 
 async function init() {
   bindEvents();
+  const initialPage = location.hash.replace("#", "") || "recommend";
+  setVisiblePage(initialPage);
   const ok = await ensureAuth();
   if (!ok) return;
   await bootstrapAfterLogin();

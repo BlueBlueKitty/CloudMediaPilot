@@ -161,35 +161,74 @@ class C115Adapter:
             "Content-Type": "application/x-www-form-urlencoded",
         }
         info_hash = self._extract_magnet_hash(source_uri)
+        attempts: list[tuple[str, dict[str, str], str]] = []
         if info_hash:
-            payload = {
-                "info_hash": info_hash,
-                "wp_path_id": target_dir_id,
-            }
-            url = f"{self.settings.c115_base_url}/lixianssp/?ac=add_task_bt"
-        else:
-            payload = {
-                "url": source_uri,
-                "savepath": target_dir_id,
-                "wp_path_id": target_dir_id,
-            }
-            url = f"{self.settings.c115_base_url}{self.settings.c115_offline_add_path}"
-        try:
-            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
-                resp = await client.post(url, headers=headers, data=payload)
-            data = self._json_or_error(resp)
-            if resp.status_code == 401 or data.get("errno") in {99, 911, 20004}:
-                raise AuthError("C115_AUTH_INVALID", "115 cookie invalid or expired", 401)
-            if data.get("state") is False:
-                raise ProviderError(
-                    "C115_UPSTREAM_ERROR",
-                    f"115 error: {data.get('error_msg') or data.get('error')}",
-                    502,
+            attempts.append(
+                (
+                    f"{self.settings.c115_base_url}/lixianssp/?ac=add_task_bt",
+                    {
+                        "info_hash": info_hash,
+                        "wp_path_id": target_dir_id,
+                    },
+                    "add_task_bt",
                 )
-            task_id = str(data.get("task_id") or data.get("info_hash") or data.get("id") or "")
-            if not task_id:
-                task_id = self.make_idempotency_key(source_uri, target_dir_id)[:16]
-            return task_id
+            )
+        attempts.append(
+            (
+                f"{self.settings.c115_base_url}{self.settings.c115_offline_add_path}",
+                {
+                    "url": source_uri,
+                    "savepath": target_dir_id,
+                    "wp_path_id": target_dir_id,
+                },
+                "add_task_url",
+            )
+        )
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.settings.request_timeout_seconds,
+                follow_redirects=True,
+                trust_env=False,
+            ) as client:
+                last_error: Exception | None = None
+                for url, payload, mode in attempts:
+                    resp = await client.post(url, headers=headers, data=payload)
+                    try:
+                        data = self._json_or_error(resp)
+                    except ProviderError as exc:
+                        # 某些115节点对 add_task_bt 会返回 "decode fail!" 纯文本；回退 add_task_url。
+                        if (
+                            mode == "add_task_bt"
+                            and "decode fail" in str(exc.message).lower()
+                            and len(attempts) > 1
+                        ):
+                            logger.warning("115_add_task_bt_decode_fail_fallback_to_url")
+                            last_error = exc
+                            continue
+                        raise
+                    if resp.status_code == 401 or data.get("errno") in {99, 911, 20004}:
+                        raise AuthError("C115_AUTH_INVALID", "115 cookie invalid or expired", 401)
+                    if data.get("state") is False:
+                        if mode == "add_task_bt" and len(attempts) > 1:
+                            last_error = ProviderError(
+                                "C115_UPSTREAM_ERROR",
+                                f"115 bt error: {data.get('error_msg') or data.get('error')}",
+                                502,
+                            )
+                            logger.warning("115_add_task_bt_failed_fallback_to_url error=%s", last_error)
+                            continue
+                        raise ProviderError(
+                            "C115_UPSTREAM_ERROR",
+                            f"115 error: {data.get('error_msg') or data.get('error')}",
+                            502,
+                        )
+                    task_id = str(data.get("task_id") or data.get("info_hash") or data.get("id") or "")
+                    if not task_id:
+                        task_id = self.make_idempotency_key(source_uri, target_dir_id)[:16]
+                    return task_id
+            if last_error:
+                raise last_error
+            raise ProviderError("C115_UPSTREAM_ERROR", "115 create task failed with empty result", 502)
         except AuthError:
             raise
         except ValidationError:
@@ -213,7 +252,11 @@ class C115Adapter:
         else:
             headers = {"Cookie": self.settings.c115_cookie}
             url = f"{self.settings.c115_base_url}{self.settings.c115_offline_list_path}"
-            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+            async with httpx.AsyncClient(
+                timeout=self.settings.request_timeout_seconds,
+                follow_redirects=True,
+                trust_env=False,
+            ) as client:
                 resp = await client.get(url, headers=headers)
             data = self._json_or_error(resp)
             tasks = data.get("tasks") or data.get("data", {}).get("tasks") or []
@@ -243,7 +286,11 @@ class C115Adapter:
             if tasks_from_sdk is not None:
                 return True, "ok"
             headers = {"Cookie": self.settings.c115_cookie}
-            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+            async with httpx.AsyncClient(
+                timeout=self.settings.request_timeout_seconds,
+                follow_redirects=True,
+                trust_env=False,
+            ) as client:
                 resp = await client.get(
                     f"{self.settings.c115_base_url}{self.settings.c115_offline_list_path}",
                     headers=headers,
@@ -351,7 +398,11 @@ class C115Adapter:
             "fc_mix": 0,
         }
         try:
-            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+            async with httpx.AsyncClient(
+                timeout=self.settings.request_timeout_seconds,
+                follow_redirects=True,
+                trust_env=False,
+            ) as client:
                 resp = await client.get(
                     "https://webapi.115.com/files",
                     params=params,
@@ -391,7 +442,11 @@ class C115Adapter:
             raise AuthError("C115_AUTH_INVALID", "missing 115 cookie", 401)
         headers = {"Cookie": self.settings.c115_cookie}
         try:
-            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+            async with httpx.AsyncClient(
+                timeout=self.settings.request_timeout_seconds,
+                follow_redirects=True,
+                trust_env=False,
+            ) as client:
                 resp = await client.get(
                     "https://webapi.115.com/share/snap",
                     params={
@@ -447,7 +502,11 @@ class C115Adapter:
         }
         last_task = ""
         try:
-            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+            async with httpx.AsyncClient(
+                timeout=self.settings.request_timeout_seconds,
+                follow_redirects=True,
+                trust_env=False,
+            ) as client:
                 for fid in ids:
                     payload = {
                         "cid": target_dir_id or "0",

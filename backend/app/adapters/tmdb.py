@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import httpx
 
 from app.core.config import ProviderSettings
@@ -22,6 +23,61 @@ class TMDBAdapter:
             return self.settings.system_proxy_url
         return None
 
+    def _base_urls(self) -> list[str]:
+        base = self.settings.tmdb_base_url.rstrip("/")
+        out = [base]
+        if "api.themoviedb.org" in base:
+            out.append(base.replace("api.themoviedb.org", "api.tmdb.org"))
+        elif "api.tmdb.org" in base:
+            out.append(base.replace("api.tmdb.org", "api.themoviedb.org"))
+        dedup: list[str] = []
+        for row in out:
+            if row not in dedup:
+                dedup.append(row)
+        return dedup
+
+    async def _get_json(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        params: dict[str, str | int],
+    ) -> dict:
+        last_exc: Exception | None = None
+        for base in self._base_urls():
+            url = f"{base}{endpoint}"
+            for attempt in range(2):
+                try:
+                    resp = await client.get(url, params=params)
+                    if resp.status_code in {429, 500, 502, 503, 504} and attempt == 0:
+                        await asyncio.sleep(0.25)
+                        continue
+                    resp.raise_for_status()
+                    try:
+                        data = resp.json()
+                    except Exception:
+                        data = {}
+                    if not isinstance(data, dict):
+                        raise ProviderError("TMDB_ERROR", "TMDB response is not object", 502)
+                    return data
+                except httpx.HTTPStatusError as exc:
+                    status = exc.response.status_code if exc.response else 0
+                    if status in {429, 500, 502, 503, 504} and attempt == 0:
+                        await asyncio.sleep(0.25)
+                        continue
+                    if status in {401, 403}:
+                        raise
+                    last_exc = exc
+                    break
+                except (httpx.ConnectError, httpx.ReadTimeout, httpx.ProxyError, httpx.RemoteProtocolError) as exc:
+                    if attempt == 0:
+                        await asyncio.sleep(0.25)
+                        continue
+                    last_exc = exc
+                    break
+        if last_exc:
+            raise last_exc
+        raise ProviderError("TMDB_ERROR", "TMDB request failed", 502)
+
     async def search(self, query: str, limit: int) -> list[TMDBSearchItem]:
         if self.settings.use_mock:
             return self._mock_rows(query, limit)
@@ -35,6 +91,8 @@ class TMDBAdapter:
             async with httpx.AsyncClient(
                 timeout=self.settings.request_timeout_seconds,
                 proxy=self._proxy(),
+                follow_redirects=True,
+                trust_env=False,
             ) as client:
                 for page in range(1, max_page + 1):
                     params = {
@@ -43,12 +101,7 @@ class TMDBAdapter:
                         "language": "zh-CN",
                         "page": page,
                     }
-                    resp = await client.get(
-                        f"{self.settings.tmdb_base_url}/search/multi",
-                        params=params,
-                    )
-                    resp.raise_for_status()
-                    payload = resp.json()
+                    payload = await self._get_json(client, "/search/multi", params)
                     page_rows = payload.get("results") or []
                     if not isinstance(page_rows, list) or not page_rows:
                         break
@@ -140,21 +193,78 @@ class TMDBAdapter:
         top = next((row for row in rows if "".join(row.title.lower().split()) == wanted), rows[0])
         if self.settings.use_mock or not self.settings.tmdb_api_key:
             return top.model_dump()
-        media = "tv" if top.media_type == "series" else "movie"
-        params = {"api_key": self.settings.tmdb_api_key, "language": "zh-CN", "append_to_response": "credits"}
         try:
-            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds, proxy=self._proxy()) as client:
-                resp = await client.get(f"{self.settings.tmdb_base_url}/{media}/{top.tmdb_id}", params=params)
-            resp.raise_for_status()
-            body = resp.json() if resp.content else {}
+            data = await self.detail_by_id(top.tmdb_id, top.media_type)
+            if data:
+                return data
         except Exception:  # noqa: BLE001
-            return top.model_dump()
+            pass
+        return top.model_dump()
+
+    async def detail_by_id(self, tmdb_id: int, media_type: str | None = None) -> dict:
+        if self.settings.use_mock or not self.settings.tmdb_api_key:
+            return {}
+        media_candidates: list[str] = []
+        raw = str(media_type or "").lower().strip()
+        if raw in {"movie"}:
+            media_candidates = ["movie"]
+        elif raw in {"series", "tv"}:
+            media_candidates = ["tv"]
+        else:
+            media_candidates = ["movie", "tv"]
+        params = {"api_key": self.settings.tmdb_api_key, "language": "zh-CN", "append_to_response": "credits"}
+        last_exc: Exception | None = None
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.settings.request_timeout_seconds,
+                proxy=self._proxy(),
+                follow_redirects=True,
+                trust_env=False,
+            ) as client:
+                for media in media_candidates:
+                    try:
+                        body = await self._get_json(client, f"/{media}/{tmdb_id}", params)
+                        data = self._detail_from_body(body)
+                        raw_poster = data.get("poster_url")
+                        data["poster_url"] = self._build_poster_url(raw_poster)
+                        return data
+                    except httpx.HTTPStatusError as exc:
+                        if exc.response is not None and exc.response.status_code == 404:
+                            last_exc = exc
+                            continue
+                        raise
+                    except Exception as exc:  # noqa: BLE001
+                        last_exc = exc
+                        continue
+        except Exception:
+            if last_exc:
+                raise last_exc
+            raise
+        return {}
+
+    @staticmethod
+    def _detail_from_body(body: dict) -> dict:
         genres = [str(x.get("name")) for x in body.get("genres") or [] if isinstance(x, dict) and x.get("name")]
         crew = ((body.get("credits") or {}).get("crew") or []) if isinstance(body, dict) else []
         cast_rows = ((body.get("credits") or {}).get("cast") or []) if isinstance(body, dict) else []
         director = next((str(x.get("name")) for x in crew if isinstance(x, dict) and x.get("job") in {"Director", "Creator"} and x.get("name")), None)
         cast = [str(x.get("name")) for x in cast_rows[:4] if isinstance(x, dict) and x.get("name")]
-        data = top.model_dump()
+        date_text = str(body.get("release_date") or body.get("first_air_date") or "")
+        year = int(date_text[:4]) if len(date_text) >= 4 and date_text[:4].isdigit() else None
+        countries = body.get("origin_country") or []
+        country = str(countries[0]) if isinstance(countries, list) and countries else None
+        data = {
+            "tmdb_id": int(body.get("id") or 0),
+            "title": str(body.get("title") or body.get("name") or ""),
+            "year": year,
+            "media_type": "series" if str(body.get("name") or "") and not body.get("title") else "movie",
+            "rating": body.get("vote_average"),
+            "overview": str(body.get("overview") or ""),
+            "poster_url": body.get("poster_path"),
+            "country": country,
+            "language": str(body.get("original_language") or "").upper() or None,
+            "episodes": int(body.get("number_of_episodes")) if isinstance(body.get("number_of_episodes"), int) else None,
+        }
         data.update({"genres": genres, "director": director, "cast": cast})
         return data
 
@@ -170,11 +280,13 @@ class TMDBAdapter:
             async with httpx.AsyncClient(
                 timeout=self.settings.request_timeout_seconds,
                 proxy=self._proxy(),
+                follow_redirects=True,
+                trust_env=False,
             ) as client:
-                resp = await client.get(
-                    f"{self.settings.tmdb_base_url}/configuration", params=params
-                )
-            return resp.status_code == 200, f"http_{resp.status_code}"
+                await self._get_json(client, "/configuration", params)
+            return True, "http_200"
+        except httpx.HTTPStatusError as exc:  # noqa: PERF203
+            return False, f"http_{exc.response.status_code if exc.response else 0}"
         except Exception as exc:  # noqa: BLE001
             return False, str(exc)
 
@@ -189,13 +301,13 @@ class TMDBAdapter:
         async with httpx.AsyncClient(
             timeout=self.settings.request_timeout_seconds,
             proxy=self._proxy(),
+            follow_redirects=True,
+            trust_env=False,
         ) as client:
             for page in range(1, max_page + 1):
                 req_params = dict(params)
                 req_params["page"] = page
-                resp = await client.get(f"{self.settings.tmdb_base_url}{endpoint}", params=req_params)
-                resp.raise_for_status()
-                payload = resp.json()
+                payload = await self._get_json(client, endpoint, req_params)
                 page_rows = payload.get("results") or []
                 if not isinstance(page_rows, list) or not page_rows:
                     break

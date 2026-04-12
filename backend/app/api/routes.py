@@ -235,6 +235,20 @@ async def recommend_detail(
     return await TMDBAdapter(build_provider_settings(runtime, store.get())).detail_by_title(title)
 
 
+@router.get("/recommend/detail/by-id")
+async def recommend_detail_by_id(
+    tmdb_id: int = Query(ge=1),
+    media_type: str = Query(default="", pattern="^(|movie|series|tv)$"),
+    store: AppConfigStore = Depends(get_app_config_store),
+    _: str = Depends(_require_auth),
+) -> dict:
+    runtime = get_settings()
+    return await TMDBAdapter(build_provider_settings(runtime, store.get())).detail_by_id(
+        tmdb_id=tmdb_id,
+        media_type=media_type or None,
+    )
+
+
 @router.get("/tmdb/image")
 async def tmdb_image_proxy(url: str = Query(min_length=1, max_length=1024)) -> Response:
     parsed = urlparse(url)

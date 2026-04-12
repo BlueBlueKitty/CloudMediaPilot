@@ -2,6 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir \
   'fastapi>=0.116.0' \
   'uvicorn[standard]>=0.32.0' \

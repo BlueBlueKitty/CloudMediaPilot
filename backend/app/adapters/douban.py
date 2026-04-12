@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import logging
 
 import httpx
 
@@ -19,6 +20,7 @@ _DOUBAN_COOKIE = (
     "__utma=223695111.1882744177.1723448979.1739167503.42; "
     "__utmb=223695111.0.10.1739176523"
 )
+logger = logging.getLogger("provider.douban")
 
 
 class DoubanAdapter:
@@ -79,10 +81,22 @@ class DoubanAdapter:
         }
         url = "https://movie.douban.com/j/search_subjects"
         try:
-            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+            async with httpx.AsyncClient(
+                timeout=self.settings.request_timeout_seconds,
+                follow_redirects=True,
+                trust_env=False,
+            ) as client:
                 resp = await client.get(url, params=params, headers=headers)
             resp.raise_for_status()
-            payload = resp.json() if resp.content else {}
+            try:
+                payload = resp.json() if resp.content else {}
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "douban_non_json status=%s body=%s",
+                    resp.status_code,
+                    resp.text[:300],
+                )
+                raise ProviderError("DOUBAN_ERROR", "Douban 返回非 JSON 响应", 502) from exc
             subjects = payload.get("subjects") if isinstance(payload, dict) else []
             if not isinstance(subjects, list):
                 subjects = []

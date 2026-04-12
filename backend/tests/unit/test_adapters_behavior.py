@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import httpx
 import pytest
+from app.adapters.c115 import C115Adapter
 from app.adapters.pansou import PanSouAdapter
 from app.adapters.prowlarr import ProwlarrAdapter
 from app.adapters.tmdb import TMDBAdapter
@@ -116,6 +118,40 @@ async def test_tmdb_search_supports_multi_page(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
+async def test_tmdb_search_fallbacks_to_alt_domain_when_primary_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Client:
+        async def __aenter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return None
+
+        async def get(self, url, params=None):  # type: ignore[no-untyped-def]
+            if "api.themoviedb.org" in url:
+                raise httpx.ConnectError("primary_down")
+            return _Resp(
+                {
+                    "total_pages": 1,
+                    "results": [
+                        {
+                            "id": 1,
+                            "title": "Fallback OK",
+                            "media_type": "movie",
+                            "poster_path": "/x.jpg",
+                        }
+                    ],
+                }
+            )
+
+    monkeypatch.setattr("app.adapters.tmdb.httpx.AsyncClient", lambda **kwargs: _Client())
+    out = await TMDBAdapter(_settings()).search("fallback", 5)
+    assert len(out) == 1
+    assert out[0].title == "Fallback OK"
+
+
+@pytest.mark.asyncio
 async def test_prowlarr_parses_dict_results(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Client:
         async def __aenter__(self):  # type: ignore[no-untyped-def]
@@ -186,3 +222,53 @@ def test_dedupe_falls_back_to_source_id_when_link_missing() -> None:
     ]
     out = SearchService._dedupe(rows)
     assert len(out) == 2
+
+
+@pytest.mark.asyncio
+async def test_c115_magnet_falls_back_to_add_task_url_when_bt_decode_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RespText:
+        status_code = 200
+        text = "decode fail!"
+        content = b"decode fail!"
+
+        def json(self):  # type: ignore[no-untyped-def]
+            raise ValueError("non-json")
+
+    class _RespJson:
+        status_code = 200
+        text = '{"state": true, "task_id": "task-123"}'
+        content = b'{"state": true, "task_id": "task-123"}'
+
+        def json(self):  # type: ignore[no-untyped-def]
+            return {"state": True, "task_id": "task-123"}
+
+    class _Client:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def __aenter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return None
+
+        async def post(self, url, headers=None, data=None):  # type: ignore[no-untyped-def]
+            self.calls.append(url)
+            if "ac=add_task_bt" in url:
+                return _RespText()
+            return _RespJson()
+
+    fake = _Client()
+    monkeypatch.setattr("app.adapters.c115.httpx.AsyncClient", lambda **kwargs: fake)
+    settings = _settings()
+    settings.c115_cookie = "cookie"
+    task_id = await C115Adapter(settings).create_offline_task(
+        "magnet:?xt=urn:btih:13C51508AE25C8F2368FA260FC63478183D5A234",
+        "0",
+    )
+    assert task_id == "task-123"
+    assert len(fake.calls) == 2
+    assert "ac=add_task_bt" in fake.calls[0]
+    assert "ac=add_task_url" in fake.calls[1]

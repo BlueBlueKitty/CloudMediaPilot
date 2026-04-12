@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from datetime import datetime, timezone
 import logging
+import sys
 from threading import RLock
 
 _MAX_LOGS = 1000
@@ -44,6 +45,8 @@ class MemoryLogHandler(logging.Handler):
 
 handler = MemoryLogHandler()
 handler.setFormatter(logging.Formatter("%(message)s"))
+console_handler = logging.StreamHandler(stream=sys.stdout)
+console_handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
 
 
 def configure_logging() -> None:
@@ -51,5 +54,7 @@ def configure_logging() -> None:
     root.setLevel(logging.INFO)
     if handler not in root.handlers:
         root.addHandler(handler)
-    logging.getLogger("uvicorn.access").disabled = True
+    if console_handler not in root.handlers:
+        root.addHandler(console_handler)
+    logging.getLogger("uvicorn.access").disabled = False
     logging.getLogger("httpx").setLevel(logging.WARNING)
