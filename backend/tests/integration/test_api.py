@@ -126,6 +126,21 @@ def test_transfer_share_items_can_be_browsed_recursively(monkeypatch, tmp_path) 
     assert all(item["is_dir"] is False for item in child_items)
 
 
+def test_storage_dirs_returns_ancestors_for_saved_child_dir(monkeypatch, tmp_path) -> None:
+    _prepare_config_db(monkeypatch, tmp_path)
+    _login()
+
+    response = client.get("/storage/dirs", params={"provider": "115", "parent_id": "100"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["parent_path"] == "/媒体"
+    assert data["ancestors"] == [
+        {"id": "0", "path": "/"},
+        {"id": "100", "path": "/媒体"},
+    ]
+
+
 def test_settings_masked_and_update(monkeypatch, tmp_path) -> None:
     _prepare_config_db(monkeypatch, tmp_path)
     _login()

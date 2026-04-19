@@ -383,13 +383,14 @@ async def storage_dirs(
     runtime = get_settings()
     settings = build_provider_settings(runtime, store.get())
     if provider == "quark":
-        parent_path, items = await QuarkAdapter(settings).list_dirs(parent_id)
+        parent_path, ancestors, items = await QuarkAdapter(settings).list_dirs(parent_id)
     else:
-        parent_path, items = await C115Adapter(settings).list_dirs(parent_id)
+        parent_path, ancestors, items = await C115Adapter(settings).list_dirs(parent_id)
     return C115DirListResponse(
         request_id=new_request_id(),
         parent_id=parent_id,
         parent_path=parent_path,
+        ancestors=ancestors,
         items=items,
     )
 

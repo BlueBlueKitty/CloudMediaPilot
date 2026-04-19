@@ -42,6 +42,7 @@ const state = {
     provider: "115",
     sourceUri: "",
     onConfirm: null,
+    renderSeq: 0,
   },
   transfer: {
     sourceUri: "",
@@ -530,11 +531,13 @@ function renderListItem(row) {
   const id = resultId(row);
   item.classList.toggle("is-selected", state.selectedResultIds.has(id));
   const sourceText = row.magnet || row.link || row.source_id || "-";
+  const sourceDetail = row.source_detail || "-";
   item.innerHTML = `
     ${state.resultSelectMode ? `<label class="result-check"><input type="checkbox" ${state.selectedResultIds.has(id) ? "checked" : ""} /></label>` : ""}
     <div class="resource-main">
       <div class="trend-meta">
         <span class="tag">${escapeHtml(row.source || "-")}</span>
+        <span class="tag">${escapeHtml(sourceDetail)}</span>
         <span class="tag">${escapeHtml(cloudTypeName(row.cloud_type || "other"))}</span>
       </div>
       <div class="resource-title">${escapeHtml(row.title || "-")}</div>
@@ -590,12 +593,13 @@ function renderPosterCard(row) {
   const id = resultId(row);
   card.classList.toggle("is-selected", state.selectedResultIds.has(id));
   const img = posterSrc(row.tmdb_poster || "");
+  const sourceDetail = row.source_detail || "-";
   card.innerHTML = `
     ${state.resultSelectMode ? `<label class="result-check poster-check"><input type="checkbox" ${state.selectedResultIds.has(id) ? "checked" : ""} /></label>` : ""}
     <img src="${escapeHtml(img)}" alt="${escapeHtml(row.title || "-")}" />
     <div class="body">
       <div class="title">${escapeHtml(row.title || "-")}</div>
-      <div class="meta">${escapeHtml(cloudTypeName(row.cloud_type || "other"))} / ${escapeHtml(row.source || "-")}</div>
+      <div class="meta">${escapeHtml(row.source || "-")} / ${escapeHtml(sourceDetail)} / ${escapeHtml(cloudTypeName(row.cloud_type || "other"))}</div>
       <div class="meta">${row.size ? Math.round(row.size / 1024 / 1024) + " MB" : "-"}</div>
       <div class="actions">
         <button class="btn-save" type="button">一键转存</button>
@@ -1018,6 +1022,28 @@ async function loadTransferItems(parentId = "") {
   });
 }
 
+function syncDirPickerBackButton() {
+  const btn = document.getElementById("dirPickerBackBtn");
+  if (btn) btn.disabled = state.dirPicker.stack.length <= 1;
+}
+
+function normalizeDirPickerStack(data, current) {
+  const ancestors = Array.isArray(data.ancestors) ? data.ancestors : [];
+  const stack = ancestors
+    .filter((item) => item && item.id)
+    .map((item) => ({
+      id: String(item.id),
+      path: item.path || "/",
+    }));
+  const currentId = String(current.id || "0");
+  const currentPath = data.parent_path || current.path || "/";
+  const last = stack[stack.length - 1];
+  if (!last || last.id !== currentId) {
+    stack.push({ id: currentId, path: currentPath });
+  }
+  return stack;
+}
+
 async function openDirPicker(initialId, initialPath, provider, sourceUri, onConfirm) {
   const modal = document.getElementById("dirPickerModal");
   state.dirPicker.stack = [{ id: initialId || "0", path: initialPath || "/" }];
@@ -1025,18 +1051,27 @@ async function openDirPicker(initialId, initialPath, provider, sourceUri, onConf
   state.dirPicker.sourceUri = sourceUri || "";
   state.dirPicker.onConfirm = onConfirm;
   modal.hidden = false;
+  syncDirPickerBackButton();
   await renderDirPicker();
 }
 
 async function renderDirPicker() {
-  const current = state.dirPicker.stack[state.dirPicker.stack.length - 1];
+  const renderSeq = ++state.dirPicker.renderSeq;
+  let current = state.dirPicker.stack[state.dirPicker.stack.length - 1];
   const listBox = document.getElementById("dirPickerList");
   document.getElementById("dirPickerPath").textContent = current.path || "/";
   listBox.innerHTML = '<div class="dir-item">加载中...</div>';
   try {
     const data = await loadDirList(current.id, state.dirPicker.provider || "115");
+    if (renderSeq !== state.dirPicker.renderSeq) return;
+    const nextStack = normalizeDirPickerStack(data, current);
+    if (nextStack.length) {
+      state.dirPicker.stack = nextStack;
+      current = state.dirPicker.stack[state.dirPicker.stack.length - 1];
+    }
     current.path = data.parent_path || current.path || "/";
     document.getElementById("dirPickerPath").textContent = current.path;
+    syncDirPickerBackButton();
     if (!data.items || !data.items.length) {
       listBox.innerHTML = '<div class="dir-item">当前目录无子目录</div>';
       return;
@@ -1456,6 +1491,7 @@ function bindEvents() {
   document.getElementById("dirPickerBackBtn").onclick = async () => {
     if (state.dirPicker.stack.length > 1) {
       state.dirPicker.stack.pop();
+      syncDirPickerBackButton();
       await renderDirPicker();
     }
   };

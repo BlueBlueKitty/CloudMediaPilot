@@ -164,7 +164,12 @@ async def test_prowlarr_parses_dict_results(monkeypatch: pytest.MonkeyPatch) -> 
             return _Resp(
                 {
                     "results": [
-                        {"guid": "g1", "title": "A", "downloadUrl": "https://d1"},
+                        {
+                            "guid": "g1",
+                            "title": "A",
+                            "downloadUrl": "https://d1",
+                            "indexer": "SiteA",
+                        },
                         {"guid": "g2", "title": "B", "downloadUrl": "https://d2"},
                         {"guid": "g3", "title": "C", "downloadUrl": "https://d3"},
                     ]
@@ -175,6 +180,7 @@ async def test_prowlarr_parses_dict_results(monkeypatch: pytest.MonkeyPatch) -> 
     out = await ProwlarrAdapter(_settings()).search("test", 50)
     assert len(out) == 3
     assert [row.source_id for row in out] == ["g1", "g2", "g3"]
+    assert out[0].source_detail == "SiteA"
 
 
 @pytest.mark.asyncio
@@ -192,11 +198,16 @@ async def test_pansou_parses_wrapped_data_rows(monkeypatch: pytest.MonkeyPatch) 
                     "code": 0,
                     "data": {
                         "results": [
-                            {"unique_id": "u1", "title": "X", "links": [{"url": "https://a"}]},
+                            {
+                                "unique_id": "u1",
+                                "title": "X",
+                                "source": "tg-channel",
+                                "links": [{"url": "https://a"}],
+                            },
                             {
                                 "unique_id": "u2",
                                 "title": "Y",
-                                "links": [{"url": "magnet:?xt=urn:1"}],
+                                "links": [{"url": "magnet:?xt=urn:1", "source": "plugin-a"}],
                             },
                             {"unique_id": "u3", "title": "Z", "content": "https://fallback"},
                         ]
@@ -207,6 +218,8 @@ async def test_pansou_parses_wrapped_data_rows(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr("app.adapters.pansou.httpx.AsyncClient", lambda **kwargs: _Client())
     out = await PanSouAdapter(_settings()).search("test", 20)
     assert len(out) == 3
+    assert out[0].source_detail == "tg-channel"
+    assert out[1].source_detail == "plugin-a"
     assert out[1].magnet and out[1].magnet.startswith("magnet:")
     assert out[2].link == "https://fallback"
 

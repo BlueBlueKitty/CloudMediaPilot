@@ -77,6 +77,27 @@ class PanSouAdapter:
             return aliases[value]
         return infer_cloud_type(fallback_url, fallback_magnet)
 
+    @staticmethod
+    def _source_detail(*rows: dict) -> str | None:
+        keys = (
+            "source",
+            "source_name",
+            "channel",
+            "channel_name",
+            "from",
+            "site",
+            "plugin",
+            "plugin_name",
+            "sender",
+            "username",
+        )
+        for row in rows:
+            for key in keys:
+                value = str(row.get(key) or "").strip()
+                if value:
+                    return value
+        return None
+
     async def _get_bearer_token(self, client: httpx.AsyncClient) -> str:
         username = self.settings.pansou_username.strip()
         password = self.settings.pansou_password.strip()
@@ -167,7 +188,8 @@ class PanSouAdapter:
             row_time = self._parse_datetime(
                 row.get("datetime") or row.get("time") or row.get("date") or row.get("created_at")
             )
-            parsed_links: list[tuple[str, str | None, str, datetime | None]] = []
+            row_source_detail = self._source_detail(row)
+            parsed_links: list[tuple[str, str | None, str, datetime | None, str | None]] = []
             if isinstance(links, list):
                 for item in links:
                     if not isinstance(item, dict):
@@ -178,7 +200,15 @@ class PanSouAdapter:
                     magnet = url_value if url_value.startswith("magnet:") else None
                     cloud_type = self._normalize_cloud_type(item.get("type"), url_value, magnet)
                     link_time = self._parse_datetime(item.get("datetime") or item.get("time") or item.get("date"))
-                    parsed_links.append((url_value, magnet, cloud_type, link_time or row_time))
+                    parsed_links.append(
+                        (
+                            url_value,
+                            magnet,
+                            cloud_type,
+                            link_time or row_time,
+                            self._source_detail(item) or row_source_detail,
+                        )
+                    )
 
             fallback_url = str(row.get("url") or row.get("link") or row.get("content") or "").strip()
             if fallback_url:
@@ -189,17 +219,25 @@ class PanSouAdapter:
                         fallback_magnet,
                         infer_cloud_type(fallback_url, fallback_magnet),
                         row_time,
+                        row_source_detail,
                     )
                 )
 
             if not parsed_links:
-                parsed_links.append(("", None, "other", row_time))
+                parsed_links.append(("", None, "other", row_time, row_source_detail))
 
-            for link_idx, (url_value, magnet, cloud_type, publish_time) in enumerate(parsed_links):
+            for link_idx, (
+                url_value,
+                magnet,
+                cloud_type,
+                publish_time,
+                source_detail,
+            ) in enumerate(parsed_links):
                 out.append(
                     SearchResultItem(
                         source="pansou",
                         source_id=f"{base_source_id}-{link_idx}",
+                        source_detail=source_detail,
                         title=base_title,
                         link=url_value,
                         magnet=magnet,
@@ -222,6 +260,7 @@ class PanSouAdapter:
                     SearchResultItem(
                         source="pansou",
                         source_id=f"mock-{idx}",
+                        source_detail="mock",
                         title=f"{keyword} PanSou Mock {idx}",
                         link=link,
                         magnet=None,

@@ -8,7 +8,7 @@ import httpx
 
 from app.core.config import ProviderSettings
 from app.core.errors import AuthError, ProviderError, ValidationError
-from app.schemas.models import C115DirItem
+from app.schemas.models import C115DirAncestor, C115DirItem
 
 
 class QuarkAdapter:
@@ -295,13 +295,24 @@ class QuarkAdapter:
         except Exception as exc:  # noqa: BLE001
             return False, str(exc)
 
-    async def list_dirs(self, parent_id: str = "0") -> tuple[str, list[C115DirItem]]:
+    async def list_dirs(
+        self, parent_id: str = "0"
+    ) -> tuple[str, list[C115DirAncestor], list[C115DirItem]]:
         if self.settings.use_mock:
             if parent_id == "0":
-                return "/", [C115DirItem(id="q100", name="电影"), C115DirItem(id="q200", name="剧集")]
+                return "/", [C115DirAncestor(id="0", path="/")], [
+                    C115DirItem(id="q100", name="电影"),
+                    C115DirItem(id="q200", name="剧集"),
+                ]
             if parent_id == "q100":
-                return "/电影", [C115DirItem(id="q101", name="华语")]
-            return "/剧集", [C115DirItem(id="q201", name="美剧")]
+                return "/电影", [
+                    C115DirAncestor(id="0", path="/"),
+                    C115DirAncestor(id="q100", path="/电影"),
+                ], [C115DirItem(id="q101", name="华语")]
+            return "/剧集", [
+                C115DirAncestor(id="0", path="/"),
+                C115DirAncestor(id=str(parent_id), path="/剧集"),
+            ], [C115DirItem(id="q201", name="美剧")]
         if not self.settings.quark_cookie:
             raise AuthError("QUARK_AUTH_INVALID", "missing quark cookie", 401)
 
@@ -343,7 +354,11 @@ class QuarkAdapter:
                     if int(row.get("file_type") or 1) != 0:
                         continue
                     out.append(C115DirItem(id=fid, name=name, is_dir=True))
-            return "/" if parent_id in {"0", ""} else f"/{parent_id}", out
+            parent_path = "/" if parent_id in {"0", ""} else f"/{parent_id}"
+            ancestors = [C115DirAncestor(id="0", path="/")]
+            if parent_id not in {"0", ""}:
+                ancestors.append(C115DirAncestor(id=parent_id, path=parent_path))
+            return parent_path, ancestors, out
         except (ProviderError, AuthError):
             raise
         except Exception as exc:  # noqa: BLE001

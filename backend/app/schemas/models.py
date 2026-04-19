@@ -36,6 +36,7 @@ class SearchRequest(BaseModel):
 class SearchResultItem(BaseModel):
     source: Literal["pansou", "prowlarr"]
     source_id: str
+    source_detail: str | None = None
     title: str
     link: str
     magnet: str | None = None
@@ -352,8 +353,14 @@ class C115DirItem(BaseModel):
     is_dir: bool = True
 
 
+class C115DirAncestor(BaseModel):
+    id: str
+    path: str
+
+
 class C115DirListResponse(BaseModel):
     request_id: str
     parent_id: str
     parent_path: str
+    ancestors: list[C115DirAncestor] = Field(default_factory=list)
     items: list[C115DirItem]

@@ -9,7 +9,7 @@ import httpx
 
 from app.core.config import ProviderSettings
 from app.core.errors import AuthError, ProviderError, ValidationError
-from app.schemas.models import C115DirItem, PublicTaskState
+from app.schemas.models import C115DirAncestor, C115DirItem, PublicTaskState
 
 logger = logging.getLogger("provider.115")
 
@@ -380,7 +380,43 @@ class C115Adapter:
             out.append(C115DirItem(id=str(cid), name=str(name or cid), is_dir=True))
         return out
 
-    def _try_p115client_dirs(self, parent_id: str) -> tuple[str, list[C115DirItem]] | None:
+    @staticmethod
+    def _parse_dir_ancestors(
+        path_items: object, current_id: str, parent_path: str
+    ) -> list[C115DirAncestor]:
+        ancestors = [C115DirAncestor(id="0", path="/")]
+        if not isinstance(path_items, list):
+            return ancestors if current_id in {"", "0"} else [
+                *ancestors,
+                C115DirAncestor(id=str(current_id), path=parent_path or "/"),
+            ]
+
+        parts: list[str] = []
+        seen = {"0"}
+        for row in path_items:
+            if not isinstance(row, dict):
+                continue
+            cid = row.get("cid") or row.get("id") or row.get("file_id") or row.get("fid")
+            name = str(row.get("name") or row.get("n") or "").strip("/")
+            if name:
+                parts.append(name)
+            if cid in {None, "", 0, "0"}:
+                continue
+            cid_text = str(cid)
+            if cid_text in seen:
+                continue
+            path = "/" + "/".join(parts).strip("/")
+            ancestors.append(C115DirAncestor(id=cid_text, path=path or "/"))
+            seen.add(cid_text)
+
+        current_id_text = str(current_id or "0")
+        if current_id_text not in seen:
+            ancestors.append(C115DirAncestor(id=current_id_text, path=parent_path or "/"))
+        return ancestors
+
+    def _try_p115client_dirs(
+        self, parent_id: str
+    ) -> tuple[str, list[C115DirAncestor], list[C115DirItem]] | None:
         try:
             from p115client import P115Client
 
@@ -397,25 +433,34 @@ class C115Adapter:
                     ).strip("/")
                 else:
                     parent_path = "/"
+                ancestors = self._parse_dir_ancestors(path, parent_id, parent_path)
                 items = self._parse_dir_items(data.get("data") or data.get("files") or [])
-                return parent_path, items
+                return parent_path, ancestors, items
         except Exception:  # noqa: BLE001
             return None
         return None
 
-    async def list_dirs(self, parent_id: str = "0") -> tuple[str, list[C115DirItem]]:
+    async def list_dirs(
+        self, parent_id: str = "0"
+    ) -> tuple[str, list[C115DirAncestor], list[C115DirItem]]:
         if self.settings.use_mock:
             if parent_id == "0":
-                return "/", [
+                return "/", [C115DirAncestor(id="0", path="/")], [
                     C115DirItem(id="100", name="媒体"),
                     C115DirItem(id="200", name="下载"),
                 ]
             if parent_id == "100":
                 return "/媒体", [
+                    C115DirAncestor(id="0", path="/"),
+                    C115DirAncestor(id="100", path="/媒体"),
+                ], [
                     C115DirItem(id="101", name="movie"),
                     C115DirItem(id="102", name="tv"),
                 ]
-            return "/下载", [C115DirItem(id="201", name="离线任务")]
+            return "/下载", [
+                C115DirAncestor(id="0", path="/"),
+                C115DirAncestor(id=str(parent_id), path="/下载"),
+            ], [C115DirItem(id="201", name="离线任务")]
         if not self.settings.c115_cookie:
             raise AuthError("C115_AUTH_INVALID", "missing 115 cookie", 401)
 
@@ -466,8 +511,9 @@ class C115Adapter:
                 ).strip("/")
             else:
                 parent_path = "/"
+            ancestors = self._parse_dir_ancestors(path_items, parent_id, parent_path)
             items = self._parse_dir_items(data.get("data") or data.get("files") or [])
-            return parent_path, items
+            return parent_path, ancestors, items
         except AuthError:
             raise
         except Exception as exc:  # noqa: BLE001

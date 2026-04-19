@@ -101,6 +101,17 @@ class ProwlarrAdapter:
         end = skip(start)
         return sha1(data[start:end]).hexdigest().upper()
 
+    @staticmethod
+    def _source_detail(row: dict) -> str | None:
+        for key in ("indexer", "indexerName", "indexer_name", "site", "tracker", "source"):
+            value = str(row.get(key) or "").strip()
+            if value:
+                return value
+        indexer_id = row.get("indexerId") or row.get("indexer_id")
+        if indexer_id not in {None, ""}:
+            return f"indexer-{indexer_id}"
+        return None
+
     async def search(self, keyword: str, limit: int) -> list[SearchResultItem]:
         if self.settings.use_mock:
             rows = []
@@ -110,6 +121,7 @@ class ProwlarrAdapter:
                     SearchResultItem(
                         source="prowlarr",
                         source_id=f"mock-{idx}",
+                        source_detail="mock-indexer",
                         title=f"{keyword} Prowlarr Mock {idx}",
                         link=magnet,
                         magnet=magnet,
@@ -178,6 +190,7 @@ class ProwlarrAdapter:
                         SearchResultItem(
                             source="prowlarr",
                             source_id=str(row.get("guid") or f"prowlarr-{idx}"),
+                            source_detail=self._source_detail(row),
                             title=row.get("title") or "unknown",
                             link=link,
                             magnet=magnet if magnet and magnet.startswith("magnet:") else None,
