@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>CloudMediaPilot</title>
     <link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
-    <link rel="stylesheet" href="/assets/app.css?v=20260412-14" />
+    <link rel="stylesheet" href="/assets/app.css?v=20260601-04" />
   </head>
   <body>
     <div class="layout">
@@ -281,15 +281,21 @@
     </div>
 
     <div id="transferItemsModal" class="modal" hidden>
-      <div class="modal-card dir-modal-card">
-        <h3>选择转存资源</h3>
-        <div id="transferItemsTitle" class="dir-picked-line"></div>
-        <div class="bulk-controls">
+      <div class="modal-card dir-modal-card transfer-browser-card">
+        <div class="transfer-browser-head">
+          <div>
+            <h3>选择转存资源</h3>
+            <p class="transfer-browser-subtitle">浏览分享目录，勾选需要保存到网盘中的文件或文件夹。</p>
+          </div>
+          <div id="transferItemsTitle" class="dir-picked-line transfer-browser-path"></div>
+        </div>
+        <div id="transferItemsStats" class="transfer-browser-stats"></div>
+        <div class="bulk-controls transfer-browser-toolbar">
           <button id="transferSelectAllBtn" type="button">全选当前目录</button>
           <span id="transferSelectSummary"></span>
         </div>
         <div id="transferItemsList" class="dir-picker-list"></div>
-        <div class="modal-actions">
+        <div class="modal-actions transfer-browser-actions">
           <button id="transferItemsBackBtn" type="button">返回上级</button>
           <button id="transferItemsCancelBtn" type="button">取消</button>
           <button id="transferItemsNextBtn" type="button" class="btn-primary">下一步</button>
@@ -315,11 +321,12 @@
         <p class="hint">默认：admin / admin</p>
         <label><span>用户名</span><input id="loginUsername" autocomplete="username" /></label>
         <label><span>密码</span><div class="password-wrap"><input id="loginPassword" type="password" autocomplete="current-password" /><button type="button" class="btn-secret-toggle" data-secret-target="loginPassword">显示</button></div></label>
+        <label class="login-remember"><input id="loginRemember" type="checkbox" /><span>记住密码</span><small>仅保存在当前浏览器</small></label>
         <small id="loginError" class="login-error" hidden></small>
         <button type="submit" class="btn-primary">登录</button>
       </form>
     </div>
 
-    <script src="/assets/app.js?v=20260412-15" type="module"></script>
+    <script src="/assets/app.js?v=20260601-04" type="module"></script>
   </body>
 </html>

@@ -23,7 +23,7 @@ def infer_cloud_type(link: str, magnet: str | None = None) -> str:
     if raw.startswith("magnet:"):
         return "magnet"
     if raw.startswith("ed2k://"):
-        return "ed2k"
+        return "magnet"
     try:
         netloc = urlparse(raw).netloc.lower()
     except Exception:  # noqa: BLE001

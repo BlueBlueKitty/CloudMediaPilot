@@ -67,7 +67,6 @@ const PANSOU_CLOUD_TYPE_OPTIONS = [
   ["mobile", "移动云盘"],
   ["xunlei", "迅雷网盘"],
   ["magnet", "磁力"],
-  ["ed2k", "ed2k"],
 ];
 
 const IMG_FALLBACK =
@@ -81,6 +80,7 @@ const IMG_FALLBACK =
 
 const statusBox = document.getElementById("status");
 const nav = document.getElementById("nav");
+const LOGIN_REMEMBER_KEY = "cmp_login_remember_v1";
 
 function setStatus(message, level = "ok") {
   statusBox.hidden = false;
@@ -140,6 +140,60 @@ function escapeHtml(input) {
     .replaceAll('"', "&quot;");
 }
 
+function formatBytes(size) {
+  if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) return "-";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = size;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const digits = value >= 100 || unitIndex === 0 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function loadRememberedLogin() {
+  try {
+    const raw = localStorage.getItem(LOGIN_REMEMBER_KEY);
+    if (!raw) return { remember: false, username: "", password: "" };
+    const parsed = JSON.parse(raw);
+    return {
+      remember: !!parsed.remember,
+      username: String(parsed.username || ""),
+      password: String(parsed.password || ""),
+    };
+  } catch {
+    return { remember: false, username: "", password: "" };
+  }
+}
+
+function saveRememberedLogin(username, password) {
+  localStorage.setItem(
+    LOGIN_REMEMBER_KEY,
+    JSON.stringify({
+      remember: true,
+      username: String(username || ""),
+      password: String(password || ""),
+    })
+  );
+}
+
+function clearRememberedLogin() {
+  localStorage.removeItem(LOGIN_REMEMBER_KEY);
+}
+
+function syncRememberedLoginForm() {
+  const remembered = loadRememberedLogin();
+  const usernameInput = document.getElementById("loginUsername");
+  const passwordInput = document.getElementById("loginPassword");
+  const rememberInput = document.getElementById("loginRemember");
+  if (!usernameInput || !passwordInput || !rememberInput) return;
+  rememberInput.checked = remembered.remember;
+  if (remembered.username) usernameInput.value = remembered.username;
+  if (remembered.password) passwordInput.value = remembered.password;
+}
+
 function getImageMode() {
   const selected = document.querySelector('input[name="imgMode"]:checked');
   return selected ? selected.value : "direct";
@@ -189,7 +243,7 @@ function cloudTypeName(value) {
     123: "123",
     "115": "115",
     other: "其他",
-    ed2k: "ed2k",
+    ed2k: "磁力",
     mobile: "移动",
     xunlei: "迅雷",
     baidu: "百度",
@@ -970,6 +1024,7 @@ async function ensureAuth() {
     overlay.hidden = true;
     return true;
   }
+  syncRememberedLoginForm();
   overlay.hidden = false;
   return false;
 }
@@ -983,6 +1038,7 @@ async function doLogin(event) {
   }
   const username = document.getElementById("loginUsername").value.trim();
   const password = document.getElementById("loginPassword").value;
+  const remember = document.getElementById("loginRemember").checked;
   if (!username || !password) {
     setStatus("请输入用户名和密码", "warn");
     return;
@@ -992,8 +1048,15 @@ async function doLogin(event) {
       method: "POST",
       body: JSON.stringify({ username, password }),
     });
+    if (remember) {
+      saveRememberedLogin(username, password);
+    } else {
+      clearRememberedLogin();
+    }
     document.getElementById("loginOverlay").hidden = true;
-    document.getElementById("loginPassword").value = "";
+    if (!remember) {
+      document.getElementById("loginPassword").value = "";
+    }
     await bootstrapAfterLogin();
     setStatus("登录成功");
   } catch (error) {
@@ -1145,6 +1208,32 @@ function updateTransferSelectionSummary() {
   if (btn) btn.disabled = currentItems.length === 0;
 }
 
+function renderTransferStats() {
+  const root = document.getElementById("transferItemsStats");
+  if (!root) return;
+  const items = state.transfer.items || [];
+  const files = items.filter((item) => !item.is_dir);
+  const dirs = items.filter((item) => item.is_dir);
+  const selected = items.filter((item) => state.transfer.selectedIds.includes(item.id));
+  const selectedSize = selected.reduce((sum, item) => sum + (item.is_dir ? 0 : item.size || 0), 0);
+  const stats = [
+    { label: "当前目录", value: `${items.length} 项` },
+    { label: "文件夹", value: `${dirs.length} 个` },
+    { label: "文件", value: `${files.length} 个` },
+    { label: "已选体积", value: formatBytes(selectedSize) },
+  ];
+  root.innerHTML = stats
+    .map(
+      (item) => `
+        <div class="transfer-browser-stat">
+          <span class="label">${escapeHtml(item.label)}</span>
+          <span class="value">${escapeHtml(item.value)}</span>
+        </div>
+      `
+    )
+    .join("");
+}
+
 function renderTransferItemsModal() {
   const list = document.getElementById("transferItemsList");
   document.getElementById("transferItemsTitle").textContent =
@@ -1152,6 +1241,7 @@ function renderTransferItemsModal() {
   document.getElementById("transferItemsBackBtn").disabled = state.transfer.stack.length <= 1;
   list.innerHTML = "";
   updateTransferSelectionSummary();
+  renderTransferStats();
   if (!state.transfer.items.length) {
     list.innerHTML = '<div class="dir-item">当前目录没有可选择资源</div>';
     return;
@@ -1159,18 +1249,30 @@ function renderTransferItemsModal() {
   state.transfer.items.forEach((item) => {
     const row = document.createElement("div");
     row.className = "dir-item transfer-item-row";
-    const sizeText = item.size ? ` (${Math.round(item.size / 1024 / 1024)} MB)` : "";
+    row.dataset.kind = item.is_dir ? "dir" : "file";
+    const metaText = item.is_dir ? "文件夹" : formatBytes(item.size);
     const checked = state.transfer.selectedIds.includes(item.id) ? "checked" : "";
     if (item.is_dir) {
       row.innerHTML = `
         <input type="checkbox" data-id="${escapeHtml(item.id)}" ${checked} />
-        <span class="transfer-item-name">📁 ${escapeHtml(item.name)}</span>
+        <div class="transfer-item-main">
+          <div class="transfer-item-title">
+            <span class="transfer-item-icon">📁</span>
+            <span class="transfer-item-name">${escapeHtml(item.name)}</span>
+          </div>
+          <div class="transfer-item-sub">进入此目录浏览并选择子资源</div>
+        </div>
+        <div class="transfer-item-meta">
+          <span class="label">类型</span>
+          <span class="value">${metaText}</span>
+        </div>
       `;
       const checkbox = row.querySelector("input");
       checkbox.onchange = () => {
         syncCurrentTransferChecks();
         row.classList.toggle("is-selected", checkbox.checked);
         updateTransferSelectionSummary();
+        renderTransferStats();
       };
       checkbox.onclick = (e) => e.stopPropagation();
       row.onclick = async (e) => {
@@ -1191,13 +1293,24 @@ function renderTransferItemsModal() {
     } else {
       row.innerHTML = `
         <input type="checkbox" data-id="${escapeHtml(item.id)}" ${checked} />
-        <span class="transfer-item-name">📄 ${escapeHtml(item.name)}${sizeText}</span>
+        <div class="transfer-item-main">
+          <div class="transfer-item-title">
+            <span class="transfer-item-icon">📄</span>
+            <span class="transfer-item-name">${escapeHtml(item.name)}</span>
+          </div>
+          <div class="transfer-item-sub">勾选后将加入本次转存任务</div>
+        </div>
+        <div class="transfer-item-meta">
+          <span class="label">体积</span>
+          <span class="value">${metaText}</span>
+        </div>
       `;
       const checkbox = row.querySelector("input");
       checkbox.onchange = () => {
         syncCurrentTransferChecks();
         row.classList.toggle("is-selected", checkbox.checked);
         updateTransferSelectionSummary();
+        renderTransferStats();
       };
       checkbox.onclick = (e) => e.stopPropagation();
       row.classList.toggle("is-selected", checkbox.checked);
@@ -1478,6 +1591,11 @@ function bindEvents() {
   document.querySelectorAll(".btn-test-provider").forEach((btn) => {
     btn.onclick = () => testProvider(btn.dataset.provider);
   });
+  document.getElementById("loginRemember").onchange = (e) => {
+    if (!e.target.checked) {
+      clearRememberedLogin();
+    }
+  };
 
   renderPansouCloudTypeSelect();
   document.getElementById("addCloudTypeBtn").onclick = () => {

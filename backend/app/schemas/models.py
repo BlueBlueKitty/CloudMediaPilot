@@ -55,7 +55,6 @@ class SearchResultItem(BaseModel):
         "pikpak",
         "mobile",
         "xunlei",
-        "ed2k",
         "other",
     ] = "other"
     score: float = 0.0
