@@ -1063,6 +1063,9 @@ function switchSettingsTab(tabName) {
   document.querySelectorAll("[data-tab-pane]").forEach((pane) => {
     pane.hidden = pane.dataset.tabPane !== tabName;
   });
+  if (tabName === "release-notes") {
+    checkReleaseUpdate().catch(() => {});
+  }
 }
 
 function renderPansouCloudTypeSelect() {
@@ -1617,12 +1620,90 @@ function renderReleaseNotes(data) {
   `;
 }
 
+function renderReleaseUpdateStatus(data, loading = false) {
+  const box = document.getElementById("releaseUpdateStatusBox");
+  if (!box) return;
+  if (loading) {
+    box.className = "release-update-status";
+    box.innerHTML = '<div class="release-notes-empty">正在检查更新...</div>';
+    return;
+  }
+  const currentVersion = escapeHtml(String(data?.current_version || "unknown"));
+  const latestVersion = escapeHtml(String(data?.latest_version || currentVersion));
+  const checkError = data?.check_error ? String(data.check_error) : "";
+  const hasUpdate = !!data?.has_update;
+  if (checkError) {
+    box.className = "release-update-status";
+    box.innerHTML = `
+      <div class="release-update-head">
+        <span class="release-update-title">更新检查失败</span>
+        <span class="release-update-meta">当前版本：v${currentVersion}</span>
+      </div>
+      <div class="release-notes-empty">${escapeHtml(checkError)}</div>
+    `;
+    return;
+  }
+  if (!hasUpdate) {
+    box.className = "release-update-status";
+    box.innerHTML = `
+      <div class="release-update-head">
+        <span class="release-update-title">当前已是最新版本</span>
+        <span class="release-update-meta">v${currentVersion}</span>
+      </div>
+    `;
+    return;
+  }
+  const latest = data?.latest_release_note || {};
+  const changes = Array.isArray(latest.changes) ? latest.changes : [];
+  const instructions = Array.isArray(data?.docker_update_instructions) ? data.docker_update_instructions : [];
+  const changesHtml = changes.length
+    ? changes.map((change) => `<li>${escapeHtml(String(change || ""))}</li>`).join("")
+    : "<li>暂无更新条目</li>";
+  const instructionsHtml = instructions.length
+    ? instructions.map((line) => `<li><code>${escapeHtml(String(line || ""))}</code></li>`).join("")
+    : "<li>docker pull & restart 容器</li>";
+  box.className = "release-update-status has-update";
+  box.innerHTML = `
+    <div class="release-update-head">
+      <span class="release-update-title">发现新版本：v${latestVersion}</span>
+      <span class="release-update-meta">当前版本：v${currentVersion}</span>
+    </div>
+    <div class="release-update-meta">发布时间：${escapeHtml(String(latest.date || "-"))}</div>
+    <div class="release-update-meta">更新内容：</div>
+    <ul>${changesHtml}</ul>
+    <div class="release-update-divider"></div>
+    <div class="release-update-meta">Docker 更新方式（进入 Docker 所在目录后执行）：</div>
+    <ul>${instructionsHtml}</ul>
+  `;
+}
+
+async function checkReleaseUpdate() {
+  const btn = document.getElementById("checkReleaseUpdateBtn");
+  renderReleaseUpdateStatus(null, true);
+  setButtonLoading(btn, true);
+  try {
+    const data = await api("/app/release-notes/check-update");
+    renderReleaseUpdateStatus(data, false);
+  } catch (error) {
+    renderReleaseUpdateStatus(
+      {
+        current_version: "unknown",
+        check_error: error?.message || "未知错误",
+      },
+      false
+    );
+  } finally {
+    setButtonLoading(btn, false);
+  }
+}
+
 async function loadReleaseNotes() {
   const root = document.getElementById("releaseNotesBox");
   if (!root) return;
   try {
     const data = await api("/app/release-notes");
     renderReleaseNotes(data);
+    await checkReleaseUpdate();
   } catch (error) {
     root.innerHTML = `
       <div class="release-notes-header">
@@ -1631,6 +1712,13 @@ async function loadReleaseNotes() {
       </div>
       <div class="release-notes-empty">版本说明加载失败：${escapeHtml(error.message || "未知错误")}</div>
     `;
+    renderReleaseUpdateStatus(
+      {
+        current_version: "unknown",
+        check_error: error?.message || "未知错误",
+      },
+      false
+    );
   }
 }
 
@@ -2577,6 +2665,8 @@ function bindEvents() {
   };
 
   document.getElementById("loginForm").onsubmit = doLogin;
+  const checkReleaseUpdateBtn = document.getElementById("checkReleaseUpdateBtn");
+  if (checkReleaseUpdateBtn) checkReleaseUpdateBtn.onclick = checkReleaseUpdate;
 }
 
 async function bootstrapAfterLogin() {

@@ -1371,6 +1371,41 @@ textarea:focus-visible,
   display: grid;
   gap: 10px;
 }
+.release-update-status {
+  border: 1px solid var(--line-1);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+}
+.release-update-status.has-update {
+  border-color: #6ea2ff;
+  background: color-mix(in srgb, var(--surface-2) 80%, #2f8dff 20%);
+}
+.release-update-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.release-update-title {
+  font-weight: 700;
+  color: var(--text-1);
+}
+.release-update-meta {
+  color: var(--text-3);
+  font-size: 0.9rem;
+}
+.release-update-status ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--text-2);
+}
+.release-update-divider {
+  margin: 10px 0;
+  border-top: 1px dashed var(--line-2);
+}
 .release-notes-header {
   display: flex;
   flex-wrap: wrap;

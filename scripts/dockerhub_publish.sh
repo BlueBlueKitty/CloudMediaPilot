@@ -3,13 +3,43 @@ set -euo pipefail
 
 DOCKERHUB_USER="${DOCKERHUB_USER:-bluebluekitty}"
 IMAGE_NAME="${IMAGE_NAME:-cloudmediapilot}"
-VERSION="${1:-${VERSION:-0.1.0}}"
 DOCKERFILE="${DOCKERFILE:-backend/Dockerfile}"
 CONTEXT="${CONTEXT:-.}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+VERSION_FILE="${REPO_ROOT}/backend/app/meta/version.json"
+DEFAULT_VERSION=""
+
+if [[ -f "${VERSION_FILE}" ]]; then
+  DEFAULT_VERSION="$(VERSION_FILE="${VERSION_FILE}" python - <<'PY'
+import json, pathlib
+p = pathlib.Path(__import__("os").environ["VERSION_FILE"])
+try:
+    data = json.loads(p.read_text(encoding="utf-8"))
+    print(str(data.get("current_version", "")).strip())
+except Exception:
+    print("")
+PY
+)"
+fi
+
+VERSION="${1:-${VERSION:-}}"
+
+if [[ -z "${VERSION}" ]]; then
+  if [[ -n "${DEFAULT_VERSION}" ]]; then
+    read -r -p "请输入版本号 (直接回车使用默认: ${DEFAULT_VERSION}): " INPUT_VERSION
+  else
+    read -r -p "请输入版本号 (例如 0.1.1): " INPUT_VERSION
+  fi
+  if [[ -n "${INPUT_VERSION}" ]]; then
+    VERSION="${INPUT_VERSION}"
+  else
+    VERSION="${DEFAULT_VERSION}"
+  fi
+fi
 
 if [[ -z "$VERSION" ]]; then
-  echo "用法: $0 <version>" >&2
-  echo "示例: $0 0.1.1" >&2
+  echo "版本号不能为空，且未能从 backend/app/meta/version.json 读取默认版本。" >&2
   exit 1
 fi
 

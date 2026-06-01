@@ -108,6 +108,7 @@ def _app_version() -> str:
 def _release_notes_payload() -> dict:
     fallback = {
         "product_name": "CloudMediaPilot",
+        "remote_raw_url": "",
         "current_version": "unknown",
         "release_notes": [],
     }
@@ -118,6 +119,7 @@ def _release_notes_payload() -> dict:
     if not isinstance(raw, dict):
         return fallback
     product_name = raw.get("product_name")
+    remote_raw_url = raw.get("remote_raw_url")
     current_version = raw.get("current_version")
     release_notes = raw.get("release_notes")
     if not isinstance(product_name, str) or not product_name.strip():
@@ -149,9 +151,104 @@ def _release_notes_payload() -> dict:
         )
     return {
         "product_name": product_name.strip(),
+        "remote_raw_url": str(remote_raw_url or "").strip(),
         "current_version": current_version.strip(),
         "release_notes": normalized_notes,
     }
+
+
+def _normalize_version_parts(version: str) -> tuple[int, ...]:
+    cleaned = str(version or "").strip().lower()
+    if cleaned.startswith("v"):
+        cleaned = cleaned[1:]
+    if not cleaned:
+        return (0,)
+    out: list[int] = []
+    for part in cleaned.split("."):
+        digits = "".join(ch for ch in part if ch.isdigit())
+        out.append(int(digits) if digits else 0)
+    while len(out) > 1 and out[-1] == 0:
+        out.pop()
+    return tuple(out or [0])
+
+
+def _compare_versions(lhs: str, rhs: str) -> int:
+    left = _normalize_version_parts(lhs)
+    right = _normalize_version_parts(rhs)
+    size = max(len(left), len(right))
+    left += (0,) * (size - len(left))
+    right += (0,) * (size - len(right))
+    if left > right:
+        return 1
+    if left < right:
+        return -1
+    return 0
+
+
+def _docker_update_instructions() -> list[str]:
+    return [
+        "cd <CloudMediaPilot-docker-compose-dir> && docker compose pull && docker compose up -d",
+    ]
+
+
+async def _fetch_remote_release_notes(url: str) -> dict:
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+    raw = resp.json()
+    if not isinstance(raw, dict):
+        raise ValueError("远端版本文件格式无效")
+    current_version = str(raw.get("current_version") or "").strip()
+    notes = raw.get("release_notes")
+    if not current_version:
+        raise ValueError("远端版本号缺失")
+    if not isinstance(notes, list):
+        notes = []
+    normalized_notes: list[dict] = []
+    for item in notes:
+        if not isinstance(item, dict):
+            continue
+        normalized_notes.append(
+            {
+                "version": str(item.get("version") or "").strip(),
+                "date": str(item.get("date") or "").strip(),
+                "changes": [str(x).strip() for x in (item.get("changes") or []) if str(x).strip()],
+            }
+        )
+    return {
+        "current_version": current_version,
+        "release_notes": normalized_notes,
+    }
+
+
+async def _check_release_update_payload() -> dict:
+    local = _release_notes_payload()
+    current_version = str(local.get("current_version") or "unknown")
+    remote_raw_url = str(local.get("remote_raw_url") or "").strip()
+    result = {
+        "current_version": current_version,
+        "latest_version": current_version,
+        "has_update": False,
+        "latest_release_note": None,
+        "docker_update_instructions": _docker_update_instructions(),
+        "check_error": None,
+    }
+    if not remote_raw_url:
+        result["check_error"] = "未配置 remote_raw_url"
+        return result
+    try:
+        remote = await _fetch_remote_release_notes(remote_raw_url)
+        latest_version = str(remote.get("current_version") or current_version)
+        result["latest_version"] = latest_version
+        cmp_result = _compare_versions(latest_version, current_version)
+        result["has_update"] = cmp_result > 0
+        notes = remote.get("release_notes") or []
+        if notes:
+            matched = next((x for x in notes if str(x.get("version") or "").strip() == latest_version), None)
+            result["latest_release_note"] = matched or notes[0]
+    except Exception as exc:  # noqa: BLE001
+        result["check_error"] = str(exc)
+    return result
 
 
 def _require_auth(request: Request, store: AppConfigStore = Depends(get_app_config_store)) -> str:
@@ -688,6 +785,11 @@ async def app_info(_: str = Depends(_require_auth)) -> dict:
 @router.get("/app/release-notes")
 async def app_release_notes(_: str = Depends(_require_auth)) -> dict:
     return _release_notes_payload()
+
+
+@router.get("/app/release-notes/check-update")
+async def app_release_notes_check_update(_: str = Depends(_require_auth)) -> dict:
+    return await _check_release_update_payload()
 
 
 @router.get("/logs")

@@ -8,16 +8,41 @@ $ErrorActionPreference = "Stop"
 
 $DockerhubUser = if ($env:DOCKERHUB_USER) { $env:DOCKERHUB_USER } else { "bluebluekitty" }
 $ImageName = if ($env:IMAGE_NAME) { $env:IMAGE_NAME } else { "cloudmediapilot" }
-$Version = if ($Version) { $Version } elseif ($env:VERSION) { $env:VERSION } else { $null }
 $Dockerfile = if ($env:DOCKERFILE) { $env:DOCKERFILE } else { "backend/Dockerfile" }
 $Context = if ($env:CONTEXT) { $env:CONTEXT } else { "." }
 
+$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot = Split-Path -Parent $ScriptRoot
+$VersionFile = Join-Path $RepoRoot "backend/app/meta/version.json"
+$DefaultVersion = $null
+
+if (Test-Path $VersionFile) {
+  try {
+    $VersionMeta = Get-Content $VersionFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    $DefaultVersion = [string]$VersionMeta.current_version
+  } catch {
+    Write-Warning "读取版本文件失败: $VersionFile"
+  }
+}
+
+$Version = if ($Version) { $Version } elseif ($env:VERSION) { $env:VERSION } else { $null }
+
 if ([string]::IsNullOrWhiteSpace($Version)) {
-  $Version = Read-Host "请输入版本号 (例如 0.1.1)"
+  $Prompt = if ([string]::IsNullOrWhiteSpace($DefaultVersion)) {
+    "请输入版本号 (例如 0.1.1)"
+  } else {
+    "请输入版本号 (直接回车使用默认: $DefaultVersion)"
+  }
+  $InputVersion = Read-Host $Prompt
+  if ([string]::IsNullOrWhiteSpace($InputVersion)) {
+    $Version = $DefaultVersion
+  } else {
+    $Version = $InputVersion
+  }
 }
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
-  Write-Error "版本号不能为空。用法: .\scripts\dockerhub_publish.ps1 <version>`n示例: .\scripts\dockerhub_publish.ps1 0.1.1"
+  Write-Error "版本号不能为空，且未能从 backend/app/meta/version.json 读取默认版本。"
   exit 1
 }
 

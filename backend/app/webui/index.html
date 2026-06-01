@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>CloudMediaPilot</title>
     <link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
-    <link rel="stylesheet" href="/assets/app.css?v=20260602-01" />
+    <link rel="stylesheet" href="/assets/app.css?v=20260602-02" />
   </head>
   <body>
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -319,7 +319,13 @@
 
             <section data-tab-pane="release-notes" class="form-pane" hidden>
               <article class="card form-card provider-card">
-                <h3>版本说明</h3>
+                <div class="card-title-row">
+                  <h3>版本说明</h3>
+                  <button id="checkReleaseUpdateBtn" type="button">重新检查更新</button>
+                </div>
+                <div id="releaseUpdateStatusBox" class="release-update-status">
+                  <div class="release-notes-empty">正在检查更新...</div>
+                </div>
                 <div id="releaseNotesBox" class="release-notes-box">
                   <div class="release-notes-empty">加载中...</div>
                 </div>
@@ -390,6 +396,6 @@
       </form>
     </div>
 
-    <script src="/assets/app.js?v=20260602-01" type="module"></script>
+    <script src="/assets/app.js?v=20260602-02" type="module"></script>
   </body>
 </html>
