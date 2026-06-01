@@ -7,7 +7,9 @@ from app.adapters.quark import QuarkAdapter
 from app.adapters.tmdb import TMDBAdapter
 from app.core.config import ProviderSettings, get_settings
 from app.services.app_config_service import AppConfigStore, build_provider_settings
+from app.services.cleanup_service import CleanupService
 from app.services.provider_status_service import ProviderStatusService
+from app.services.resource_filter_service import ResourceFilterService
 from app.services.search_service import SearchService
 from app.services.task_service import TaskService
 
@@ -31,7 +33,14 @@ def get_search_service() -> SearchService:
 
 def get_task_service() -> TaskService:
     settings = _provider_settings()
-    return TaskService(C115Adapter(settings), QuarkAdapter(settings), settings)
+    filter_service = ResourceFilterService(settings)
+    return TaskService(C115Adapter(settings), QuarkAdapter(settings), settings, filter_service)
+
+
+def get_cleanup_service() -> CleanupService:
+    settings = _provider_settings()
+    filter_service = ResourceFilterService(settings)
+    return CleanupService(C115Adapter(settings), QuarkAdapter(settings), settings, filter_service)
 
 
 def get_provider_status_service() -> ProviderStatusService:

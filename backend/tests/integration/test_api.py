@@ -176,3 +176,78 @@ def test_settings_masked_and_update(monkeypatch, tmp_path) -> None:
     test = client.post("/settings/test", json={"provider": "all"})
     assert test.status_code == 200
     assert len(test.json()["results"]) == 7
+
+
+def test_transfer_commit_skips_filtered_share_files(monkeypatch, tmp_path) -> None:
+    _prepare_config_db(monkeypatch, tmp_path)
+    _login()
+
+    async def fake_tree(self, source_uri, selected_ids=None):  # type: ignore[no-untyped-def]
+        return [
+            {"id": "f1", "name": "正片.mkv", "path": "/正片.mkv", "size": 100 * 1024 * 1024, "is_dir": False},
+            {
+                "id": "f2",
+                "name": "电影港 地址发布页 www.dygang.me 收藏不迷路.txt",
+                "path": "/电影港 地址发布页 www.dygang.me 收藏不迷路.txt",
+                "size": 16,
+                "is_dir": False,
+            },
+        ]
+
+    async def fake_save(self, source_uri, target_dir_id, selected_ids):  # type: ignore[no-untyped-def]
+        assert selected_ids == ["f1"]
+        return "save-1"
+
+    monkeypatch.setattr("app.adapters.c115.C115Adapter.list_share_tree", fake_tree)
+    monkeypatch.setattr("app.adapters.c115.C115Adapter.save_share_items", fake_save)
+
+    response = client.post(
+        "/transfer/commit",
+        json={
+            "source_uri": "https://115.com/s/mockcode?password=abcd",
+            "target_dir_id": "0",
+            "selected_ids": [],
+            "cloud_type": "115",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["task_id"] == "save-1"
+    assert data["kept_count"] == 1
+    assert data["skipped_count"] == 1
+    assert data["skipped_rules_summary"]
+
+
+def test_cleanup_preview_and_execute_local(monkeypatch, tmp_path) -> None:
+    _prepare_config_db(monkeypatch, tmp_path)
+    _login()
+
+    root = tmp_path / "library"
+    root.mkdir(parents=True, exist_ok=True)
+    trash = root / "电影港 地址发布页 www.dygang.me 收藏不迷路.txt"
+    keep = root / "正片.mkv"
+    trash.write_text("ad", encoding="utf-8")
+    keep.write_text("movie", encoding="utf-8")
+
+    update = client.put(
+        "/settings",
+        json={
+            "resource_cleanup_local_roots": str(root),
+            "resource_filter_enabled": True,
+            "resource_filter_rules": '[{"id":"txt","name":"文本","enabled":true,"glob":"*.txt","min_size_bytes":null,"max_size_bytes":null,"applies_to":"both"}]',
+        },
+    )
+    assert update.status_code == 200
+
+    preview = client.post("/cleanup/preview", json={"provider": "local", "local_root": str(root)})
+    assert preview.status_code == 200
+    preview_data = preview.json()
+    assert preview_data["total_matches"] == 1
+    assert preview_data["items"][0]["name"].endswith(".txt")
+
+    execute = client.post("/cleanup/execute", json={"preview_token": preview_data["preview_token"]})
+    assert execute.status_code == 200
+    execute_data = execute.json()
+    assert execute_data["deleted_count"] == 1
+    assert not trash.exists()
+    assert keep.exists()

@@ -161,6 +161,9 @@ class TransferCommitResponse(BaseModel):
     request_id: str
     task_id: str
     provider: str
+    kept_count: int = 0
+    skipped_count: int = 0
+    skipped_rules_summary: list[str] = Field(default_factory=list)
 
 
 class TaskStatusResponse(BaseModel):
@@ -240,6 +243,9 @@ class SettingsResponse(BaseModel):
     c115_offline_add_path: str
     c115_offline_list_path: str
     storage_providers: str
+    resource_filter_enabled: bool
+    resource_filter_rules: str
+    resource_cleanup_local_roots: str
     quark_cookie_masked: str
     quark_cookie: str = ""
     tianyi_username: str
@@ -290,6 +296,9 @@ class SettingsUpdateRequest(BaseModel):
     c115_offline_add_path: str | None = None
     c115_offline_list_path: str | None = None
     storage_providers: str | None = None
+    resource_filter_enabled: bool | None = None
+    resource_filter_rules: str | None = None
+    resource_cleanup_local_roots: str | None = None
     quark_cookie: str | None = None
     tianyi_username: str | None = None
     tianyi_password: str | None = None
@@ -363,3 +372,58 @@ class C115DirListResponse(BaseModel):
     parent_path: str
     ancestors: list[C115DirAncestor] = Field(default_factory=list)
     items: list[C115DirItem]
+
+
+class ResourceFilterRule(BaseModel):
+    id: str
+    name: str
+    enabled: bool = True
+    glob: str
+    min_size_mb: int | None = None
+    max_size_mb: int | None = None
+    applies_to: Literal["transfer", "cleanup", "both"] = "both"
+
+
+class CleanupPreviewRequest(BaseModel):
+    provider: Literal["115", "quark", "local"]
+    parent_id: str | None = None
+    local_root: str | None = None
+
+
+class CleanupRuleStat(BaseModel):
+    rule_id: str
+    rule_name: str
+    count: int
+    total_size: int = 0
+
+
+class CleanupMatchedItem(BaseModel):
+    id: str
+    path: str
+    name: str
+    size: int | None = None
+    rule_id: str
+    rule_name: str
+    provider: str
+
+
+class CleanupPreviewResponse(BaseModel):
+    request_id: str
+    provider: str
+    preview_token: str
+    total_matches: int
+    total_size: int = 0
+    rules: list[CleanupRuleStat] = Field(default_factory=list)
+    items: list[CleanupMatchedItem] = Field(default_factory=list)
+
+
+class CleanupExecuteRequest(BaseModel):
+    preview_token: str
+    selected_ids: list[str] | None = None
+
+
+class CleanupExecuteResponse(BaseModel):
+    request_id: str
+    provider: str
+    deleted_count: int
+    deleted_size: int = 0

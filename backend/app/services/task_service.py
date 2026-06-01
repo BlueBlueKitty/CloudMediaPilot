@@ -16,6 +16,7 @@ from app.schemas.models import (
     TaskListResponse,
     TaskStatusResponse,
 )
+from app.services.resource_filter_service import ResourceEntry, ResourceFilterService
 from app.services.task_store import TaskRecord, store
 from app.utils.media import infer_cloud_type
 
@@ -23,10 +24,17 @@ logger = logging.getLogger("transfer")
 
 
 class TaskService:
-    def __init__(self, c115: C115Adapter, quark: QuarkAdapter, settings: ProviderSettings) -> None:
+    def __init__(
+        self,
+        c115: C115Adapter,
+        quark: QuarkAdapter,
+        settings: ProviderSettings,
+        filter_service: ResourceFilterService,
+    ) -> None:
         self.c115 = c115
         self.quark = quark
         self.settings = settings
+        self.filter_service = filter_service
 
     @staticmethod
     def _supports_provider(provider: str) -> bool:
@@ -179,19 +187,67 @@ class TaskService:
             if cloud_type in {"magnet", "ed2k"}:
                 task = await self.create_offline_task(request_id, source_uri, target_dir_id)
                 logger.info("transfer_succeeded provider=%s task_id=%s", cloud_type, task.task_id)
-                return TransferCommitResponse(request_id=request_id, task_id=task.task_id, provider=cloud_type)
+                return TransferCommitResponse(request_id=request_id, task_id=task.task_id, provider=cloud_type, kept_count=1)
             if cloud_type == "115":
-                task_id = await self.c115.save_share_items(source_uri, target_dir_id, selected_ids)
+                kept_ids, skipped_summary = await self._filter_share_selection("115", source_uri, selected_ids)
+                if not kept_ids:
+                    raise ValidationError("TRANSFER_ALL_FILTERED", "匹配到的资源都被过滤规则跳过了", 400)
+                task_id = await self.c115.save_share_items(source_uri, target_dir_id, kept_ids)
                 logger.info("transfer_succeeded provider=%s task_id=%s", cloud_type, task_id)
-                return TransferCommitResponse(request_id=request_id, task_id=task_id, provider=cloud_type)
+                return TransferCommitResponse(
+                    request_id=request_id,
+                    task_id=task_id,
+                    provider=cloud_type,
+                    kept_count=len(kept_ids),
+                    skipped_count=sum(count for _name, count in skipped_summary),
+                    skipped_rules_summary=[f"{name}:{count}" for name, count in skipped_summary[:5]],
+                )
             if cloud_type == "quark":
-                task_id = await self.quark.save_selected_items(source_uri, target_dir_id, selected_ids)
+                kept_ids, skipped_summary = await self._filter_share_selection("quark", source_uri, selected_ids)
+                if not kept_ids:
+                    raise ValidationError("TRANSFER_ALL_FILTERED", "匹配到的资源都被过滤规则跳过了", 400)
+                task_id = await self.quark.save_selected_items(source_uri, target_dir_id, kept_ids)
                 logger.info("transfer_succeeded provider=%s task_id=%s", cloud_type, task_id)
-                return TransferCommitResponse(request_id=request_id, task_id=task_id, provider=cloud_type)
+                return TransferCommitResponse(
+                    request_id=request_id,
+                    task_id=task_id,
+                    provider=cloud_type,
+                    kept_count=len(kept_ids),
+                    skipped_count=sum(count for _name, count in skipped_summary),
+                    skipped_rules_summary=[f"{name}:{count}" for name, count in skipped_summary[:5]],
+                )
             raise ValidationError("TRANSFER_NOT_SUPPORTED", "当前链接类型暂不支持转存", 400)
         except Exception as exc:
             logger.error("transfer_failed provider=%s error=%s", cloud_type, exc)
             raise
+
+    async def _filter_share_selection(
+        self,
+        provider: str,
+        source_uri: str,
+        selected_ids: list[str],
+    ) -> tuple[list[str], list[tuple[str, int]]]:
+        if provider == "115":
+            rows = await self.c115.list_share_tree(source_uri, selected_ids or None)
+        else:
+            rows = await self.quark.list_share_tree(source_uri, selected_ids or None)
+        kept: list[str] = []
+        skipped: dict[str, int] = {}
+        for row in rows:
+            entry = ResourceEntry(
+                id=str(row.get("id") or ""),
+                name=str(row.get("name") or ""),
+                path=str(row.get("path") or row.get("name") or ""),
+                provider=provider,
+                size=row.get("size"),
+                is_dir=False,
+            )
+            match = self.filter_service.match(entry, operation="transfer")
+            if match:
+                skipped[match.rule_name] = skipped.get(match.rule_name, 0) + 1
+                continue
+            kept.append(entry.id)
+        return kept, sorted(skipped.items(), key=lambda item: (-item[1], item[0]))
 
     async def create_offline_task(
         self, request_id: str, source_uri: str, target_dir_id: str

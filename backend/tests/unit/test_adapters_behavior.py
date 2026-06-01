@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import sys
+import types
 
 import httpx
 import pytest
@@ -44,6 +46,9 @@ def _settings() -> ProviderSettings:
         c115_offline_add_path="/lixianssp/?ac=add_task_url",
         c115_offline_list_path="/web/lixian/?ac=task_lists",
         storage_providers="115,quark,tianyi,123",
+        resource_filter_enabled=True,
+        resource_filter_rules="",
+        resource_cleanup_local_roots="",
         quark_cookie="",
         tianyi_username="",
         tianyi_password="",
@@ -548,3 +553,105 @@ async def test_c115_add_task_url_payload_uses_wp_path_id_without_savepath(
     assert isinstance(fake.last_data, dict)
     assert fake.last_data.get("wp_path_id") == "3322179626497351548"
     assert "savepath" not in fake.last_data
+
+
+@pytest.mark.asyncio
+async def test_c115_delete_files_falls_back_to_app_sdk_on_405(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    class _Client:
+        def __init__(self, *_args, **_kwargs) -> None:
+            return None
+
+        def fs_delete(self, payload):  # type: ignore[no-untyped-def]
+            batch = list(payload)
+            calls.append(("web", batch))
+            raise RuntimeError("115 risk control 405")
+
+        def fs_delete_app(self, payload):  # type: ignore[no-untyped-def]
+            batch = list(payload)
+            calls.append(("app", batch))
+            return {"state": True}
+
+    monkeypatch.setitem(sys.modules, "p115client", types.SimpleNamespace(P115Client=_Client))
+    settings = _settings()
+    settings.c115_cookie = "cookie"
+    deleted = await C115Adapter(settings).delete_files(["1", "2"])
+    assert deleted == 2
+    assert calls == [("web", ["1", "2"]), ("app", ["1", "2"])]
+
+
+@pytest.mark.asyncio
+async def test_c115_delete_files_http_fallback_retries_comma_payload_after_405(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "p115client", None)
+
+    class _Resp405:
+        status_code = 405
+        text = "blocked"
+
+        def json(self):  # type: ignore[no-untyped-def]
+            raise ValueError("non-json")
+
+    class _RespOk:
+        status_code = 200
+        text = '{"state": true}'
+
+        def json(self):  # type: ignore[no-untyped-def]
+            return {"state": True}
+
+    class _Client:
+        def __init__(self) -> None:
+            self.payloads: list[dict[str, str]] = []
+
+        async def __aenter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return None
+
+        async def post(self, _url, headers=None, data=None):  # type: ignore[no-untyped-def]
+            assert isinstance(data, dict)
+            self.payloads.append(data)
+            if "fid[0]" in data:
+                return _Resp405()
+            return _RespOk()
+
+    fake = _Client()
+    monkeypatch.setattr("app.adapters.c115.httpx.AsyncClient", lambda **kwargs: fake)
+    settings = _settings()
+    settings.c115_cookie = "cookie"
+    deleted = await C115Adapter(settings).delete_files(["10", "20"])
+    assert deleted == 2
+    assert fake.payloads[0] == {"fid[0]": "10", "fid[1]": "20"}
+    assert fake.payloads[1] == {"fid": "10,20"}
+
+
+@pytest.mark.asyncio
+async def test_c115_delete_files_chunks_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    class _Client:
+        def __init__(self, *_args, **_kwargs) -> None:
+            return None
+
+        def fs_delete(self, payload):  # type: ignore[no-untyped-def]
+            batch = list(payload)
+            calls.append(batch)
+            return {"state": True}
+
+        def fs_delete_app(self, payload):  # type: ignore[no-untyped-def]
+            raise AssertionError("app fallback should not be used")
+
+    monkeypatch.setitem(sys.modules, "p115client", types.SimpleNamespace(P115Client=_Client))
+    monkeypatch.setattr(C115Adapter, "_delete_batch_size", 2)
+    settings = _settings()
+    settings.c115_cookie = "cookie"
+    deleted = await C115Adapter(settings).delete_files(["1", "2", "3", "4", "5"])
+    assert deleted == 5
+    assert calls == [["1", "2"], ["3", "4"], ["5"]]

@@ -58,3 +58,5 @@ def configure_logging() -> None:
         root.addHandler(console_handler)
     logging.getLogger("uvicorn.access").disabled = False
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("watchfiles").setLevel(logging.WARNING)
+    logging.getLogger("watchfiles.main").setLevel(logging.WARNING)

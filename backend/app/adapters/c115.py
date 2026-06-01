@@ -3,6 +3,9 @@ from __future__ import annotations
 from hashlib import sha256
 import logging
 import re
+import asyncio
+import time
+import json
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -16,15 +19,40 @@ logger = logging.getLogger("provider.115")
 
 class C115Adapter:
     name = "115"
+    _rl_lock = asyncio.Lock()
+    _last_115_request_at = 0.0
+    _min_interval_seconds = 0.5  # align with OpenList default idea: around 2 req/s
+    _delete_batch_size = 50
+    _delete_retry_delays = (1.0, 2.0)
 
     def __init__(self, settings: ProviderSettings) -> None:
         self.settings = settings
+
+    @classmethod
+    async def _wait_rate_limit(cls) -> None:
+        async with cls._rl_lock:
+            now = time.monotonic()
+            wait_for = cls._min_interval_seconds - (now - cls._last_115_request_at)
+            if wait_for > 0:
+                await asyncio.sleep(wait_for)
+                now = time.monotonic()
+            cls._last_115_request_at = now
 
     def _ensure_allowed(self, action: str) -> None:
         if action not in self.settings.allowed_actions:
             raise ValidationError(
                 "C115_ACTION_NOT_ALLOWED", f"action '{action}' is not allowed", 403
             )
+
+    def _ensure_cookie_ready(self, require_keys: bool = False) -> None:
+        cookie = (self.settings.c115_cookie or "").strip()
+        if not cookie:
+            raise AuthError("C115_AUTH_INVALID", "missing 115 cookie", 401)
+        if not require_keys:
+            return
+        normalized = cookie.replace(" ", "")
+        if not all(token in normalized for token in ("UID=", "CID=", "SEID=")):
+            raise AuthError("C115_AUTH_INVALID", "115 cookie格式不完整，需要包含UID/CID/SEID", 401)
 
     def _try_p115client_add(self, source_uri: str, target_dir_id: str) -> str | None:
         try:
@@ -161,6 +189,193 @@ class C115Adapter:
                 out.append(url)
         return out
 
+    @classmethod
+    def _chunk_ids(cls, ids: list[str]) -> list[list[str]]:
+        size = max(1, cls._delete_batch_size)
+        return [ids[i : i + size] for i in range(0, len(ids), size)]
+
+    @staticmethod
+    def _extract_115_error(data: dict) -> str:
+        return str(
+            data.get("error")
+            or data.get("error_msg")
+            or data.get("message")
+            or data.get("msg")
+            or "115 upstream error"
+        )
+
+    @staticmethod
+    def _looks_like_405_error(exc: Exception) -> bool:
+        if getattr(exc, "status_code", None) == 405:
+            return True
+        return "405" in str(exc)
+
+    async def _delete_files_via_sdk(self, ids: list[str]) -> int | None:
+        try:
+            from p115client import P115Client
+        except Exception:  # noqa: BLE001
+            return None
+
+        client = P115Client(self.settings.c115_cookie, check_for_relogin=False)
+        deleted = 0
+        for batch in self._chunk_ids(ids):
+            await self._wait_rate_limit()
+            last_error: Exception | None = None
+            for mode in ("web", "app"):
+                try:
+                    if mode == "web":
+                        resp = client.fs_delete(batch)
+                    else:
+                        resp = client.fs_delete_app(batch)
+                    data = resp if isinstance(resp, dict) else {}
+                    if data.get("state") is False:
+                        raise ProviderError(
+                            "C115_UPSTREAM_ERROR",
+                            self._extract_115_error(data),
+                            502,
+                        )
+                    deleted += len(batch)
+                    last_error = None
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    logger.warning(
+                        "115_delete_sdk_retry mode=%s batch_size=%s err=%s",
+                        mode,
+                        len(batch),
+                        exc,
+                    )
+                    if mode == "web" and not self._looks_like_405_error(exc):
+                        continue
+            if last_error is not None:
+                raise last_error
+        return deleted
+
+    async def _delete_files_via_http_batch(self, client: httpx.AsyncClient, ids: list[str]) -> int:
+        headers = {
+            "Cookie": self.settings.c115_cookie,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json, text/plain, */*",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        payloads = [
+            {f"fid[{i}]": fid for i, fid in enumerate(ids)},
+            {"fid": ",".join(ids)},
+        ]
+        last_error: Exception | None = None
+        for payload in payloads:
+            for delay in (0.0, *self._delete_retry_delays):
+                if delay:
+                    await asyncio.sleep(delay)
+                await self._wait_rate_limit()
+                resp = await client.post(
+                    "https://webapi.115.com/rb/delete",
+                    headers=headers,
+                    data=payload,
+                )
+                try:
+                    body = self._json_or_error(resp)
+                except ProviderError as exc:
+                    last_error = exc
+                    logger.warning(
+                        "115_delete_http_non_json status=%s batch_size=%s err=%s",
+                        resp.status_code,
+                        len(ids),
+                        exc,
+                    )
+                    if resp.status_code == 405:
+                        break
+                    break
+                if body.get("state") is False:
+                    message = self._extract_115_error(body)
+                    last_error = ProviderError("C115_UPSTREAM_ERROR", message, 502)
+                    logger.warning(
+                        "115_delete_http_failed status=%s batch_size=%s error=%s",
+                        resp.status_code,
+                        len(ids),
+                        message,
+                    )
+                    if resp.status_code == 405:
+                        break
+                    break
+                return len(ids)
+        if last_error:
+            raise last_error
+        raise ProviderError("C115_UPSTREAM_ERROR", "115 delete failed with empty retry chain", 502)
+
+    async def _fetch_115_files_json(self, params: dict, fc_mix: int) -> dict:
+        headers = {
+            "Cookie": self.settings.c115_cookie,
+            "Host": "webapi.115.com",
+            "Connection": "keep-alive",
+            "Accept": "*/*",
+            "xweb_xhr": "1",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36 MicroMessenger/6.8.0(0x16080000) NetType/WIFI MiniProgramEnv/Mac MacWechat/WMPF MacWechat/3.8.9(0x13080910) XWEB/1227",
+            "Referer": "https://servicewechat.com/wx2c744c010a61b0fa/94/page-frame.html",
+            "Sec-Fetch-Site": "cross-site",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "empty",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+        }
+        merged = {**params, "fc_mix": fc_mix}
+        urls = [
+            "https://webapi.115.com/files",
+            "https://proapi.115.com/android/files",
+            "http://web.api.115.com/files",
+        ]
+        async with httpx.AsyncClient(
+            timeout=self.settings.request_timeout_seconds,
+            follow_redirects=True,
+            trust_env=False,
+        ) as client:
+            last_error: Exception | None = None
+            for url in urls:
+                for mode in ("full", "minimal"):
+                    q = dict(merged)
+                    if mode == "minimal":
+                        q = {
+                            "aid": 1,
+                            "cid": q.get("cid", "0"),
+                            "offset": 0,
+                            "limit": 50,
+                            "show_dir": 1,
+                            "format": "json",
+                            "fc_mix": fc_mix,
+                        }
+                    try:
+                        await self._wait_rate_limit()
+                        resp = await client.get(url, params=q, headers=headers)
+                        if resp.status_code == 401:
+                            raise AuthError("C115_AUTH_INVALID", "115 cookie invalid or expired", 401)
+                        # 115 upstream may return non-standard content-type while body is still JSON.
+                        # Parse body first; only treat as upstream error when body is truly non-JSON.
+                        try:
+                            data = resp.json()
+                        except Exception:
+                            raw = (resp.text or "").lstrip()
+                            if raw.startswith("{") or raw.startswith("["):
+                                data = json.loads(raw)
+                            else:
+                                # Some risk-control pages are 200 HTML and must fallback quietly.
+                                raise ProviderError(
+                                    "C115_UPSTREAM_ERROR",
+                                    f"115 non-json response status={resp.status_code}",
+                                    502,
+                                )
+                        if not isinstance(data, dict):
+                            raise ProviderError("C115_UPSTREAM_ERROR", "115 response is not object", 502)
+                        if data.get("state") is False and data.get("errno") in {99, 911, 20004}:
+                            raise AuthError("C115_AUTH_INVALID", "115 cookie invalid or expired", 401)
+                        return data
+                    except AuthError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001
+                        last_error = exc
+            if last_error:
+                raise last_error
+        raise ProviderError("C115_UPSTREAM_ERROR", "115 list files failed with empty retry chain", 502)
+
     @staticmethod
     def _parse_share_link(source_uri: str) -> tuple[str, str]:
         parsed = urlparse(source_uri)
@@ -185,8 +400,7 @@ class C115Adapter:
         if self.settings.use_mock:
             return self.make_idempotency_key(source_uri, target_dir_id)[:16]
 
-        if not self.settings.c115_cookie:
-            raise AuthError("C115_AUTH_INVALID", "missing 115 cookie", 401)
+        self._ensure_cookie_ready()
 
         task_from_sdk = self._try_p115client_add(source_uri, target_dir_id)
         if task_from_sdk:
@@ -234,6 +448,7 @@ class C115Adapter:
                 last_error: Exception | None = None
                 for idx, (url, payload, mode) in enumerate(attempts):
                     has_next = idx < len(attempts) - 1
+                    await self._wait_rate_limit()
                     resp = await client.post(url, headers=headers, data=payload)
                     try:
                         data = self._json_or_error(resp)
@@ -287,8 +502,7 @@ class C115Adapter:
     async def query_task(self, task_id: str) -> tuple[PublicTaskState, str | None]:
         if self.settings.use_mock:
             return "completed", None
-        if not self.settings.c115_cookie:
-            raise AuthError("C115_AUTH_INVALID", "missing 115 cookie", 401)
+        self._ensure_cookie_ready(require_keys=True)
 
         tasks_from_sdk = self._try_p115client_list()
         if tasks_from_sdk is not None:
@@ -301,6 +515,7 @@ class C115Adapter:
                 follow_redirects=True,
                 trust_env=False,
             ) as client:
+                await self._wait_rate_limit()
                 resp = await client.get(url, headers=headers)
             data = self._json_or_error(resp)
             tasks = data.get("tasks") or data.get("data", {}).get("tasks") or []
@@ -335,6 +550,7 @@ class C115Adapter:
                 follow_redirects=True,
                 trust_env=False,
             ) as client:
+                await self._wait_rate_limit()
                 resp = await client.get(
                     f"{self.settings.c115_base_url}{self.settings.c115_offline_list_path}",
                     headers=headers,
@@ -378,6 +594,36 @@ class C115Adapter:
             if not is_dir or not cid:
                 continue
             out.append(C115DirItem(id=str(cid), name=str(name or cid), is_dir=True))
+        return out
+
+    @staticmethod
+    def _parse_storage_entries(rows: object) -> list[dict]:
+        out: list[dict] = []
+        if not isinstance(rows, list):
+            return out
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            ns = row.get("ns")
+            ns_int = 0
+            if isinstance(ns, int | float):
+                ns_int = int(ns)
+            elif isinstance(ns, str) and ns.isdigit():
+                ns_int = int(ns)
+            is_dir = bool(
+                row.get("is_dir")
+                or row.get("is_directory")
+                or ns_int > 0
+                or (row.get("fid") in {None, "", 0, "0"} and row.get("cid"))
+            )
+            raw_id = row.get("cid") if is_dir else row.get("fid")
+            file_id = str(raw_id or row.get("cid") or row.get("file_id") or "").strip()
+            name = str(row.get("n") or row.get("name") or row.get("file_name") or "").strip()
+            if not file_id or not name:
+                continue
+            size_raw = row.get("s") or row.get("size")
+            size = int(size_raw) if isinstance(size_raw, int | float) else None
+            out.append({"id": file_id, "name": name, "size": size, "is_dir": is_dir})
         return out
 
     @staticmethod
@@ -461,21 +707,19 @@ class C115Adapter:
                 C115DirAncestor(id="0", path="/"),
                 C115DirAncestor(id=str(parent_id), path="/下载"),
             ], [C115DirItem(id="201", name="离线任务")]
-        if not self.settings.c115_cookie:
-            raise AuthError("C115_AUTH_INVALID", "missing 115 cookie", 401)
+        self._ensure_cookie_ready(require_keys=True)
 
         sdk_data = self._try_p115client_dirs(parent_id)
         if sdk_data is not None:
             return sdk_data
 
-        headers = {"Cookie": self.settings.c115_cookie}
         params = {
             "aid": 1,
             "cid": parent_id,
             "o": "user_ptime",
             "asc": 1,
             "offset": 0,
-            "limit": 200,
+            "limit": 50,
             "show_dir": 1,
             "type": 0,
             "format": "json",
@@ -484,24 +728,9 @@ class C115Adapter:
             "natsort": 0,
             "snap": 0,
             "record_open_time": 1,
-            "fc_mix": 0,
         }
         try:
-            async with httpx.AsyncClient(
-                timeout=self.settings.request_timeout_seconds,
-                follow_redirects=True,
-                trust_env=False,
-            ) as client:
-                resp = await client.get(
-                    "https://webapi.115.com/files",
-                    params=params,
-                    headers=headers,
-                )
-            if resp.status_code == 401:
-                raise AuthError("C115_AUTH_INVALID", "115 cookie invalid or expired", 401)
-            data = self._json_or_error(resp)
-            if data.get("state") is False and data.get("errno") in {99, 911, 20004}:
-                raise AuthError("C115_AUTH_INVALID", "115 cookie invalid or expired", 401)
+            data = await self._fetch_115_files_json(params, fc_mix=0)
             path_items = data.get("path") or []
             if isinstance(path_items, list) and path_items:
                 parent_path = "/" + "/".join(
@@ -519,6 +748,81 @@ class C115Adapter:
         except Exception as exc:  # noqa: BLE001
             raise ProviderError("C115_UPSTREAM_ERROR", f"115 list dirs failed: {exc}", 502) from exc
 
+    async def list_storage_entries(self, parent_id: str = "0") -> tuple[str, list[C115DirAncestor], list[dict]]:
+        if self.settings.use_mock:
+            if parent_id == "0":
+                return "/", [C115DirAncestor(id="0", path="/")], [
+                    {"id": "100", "name": "媒体", "size": None, "is_dir": True},
+                    {"id": "f-ad", "name": "电影港 地址发布页 www.dygang.me 收藏不迷路.txt", "size": 2048, "is_dir": False},
+                ]
+            return "/媒体", [
+                C115DirAncestor(id="0", path="/"),
+                C115DirAncestor(id=str(parent_id), path="/媒体"),
+            ], [
+                {"id": "f1", "name": "正片.mkv", "size": 8 * 1024 * 1024 * 1024, "is_dir": False},
+                {"id": "f2", "name": "000A-夸克资源怎么找.png", "size": 120_000, "is_dir": False},
+            ]
+        self._ensure_cookie_ready(require_keys=True)
+        sdk_data = self._try_p115client_dirs(parent_id)
+        if sdk_data is not None:
+            parent_path, ancestors, dir_items = sdk_data
+            dir_ids = {str(item.id) for item in dir_items}
+            entries: list[dict] = [
+                {"id": str(item.id), "name": item.name, "size": None, "is_dir": True}
+                for item in dir_items
+            ]
+            params = {
+                "aid": 1,
+                "cid": parent_id,
+                "offset": 0,
+                "limit": 200,
+                "show_dir": 1,
+                "format": "json",
+            }
+            # supplement files via a single low-risk direct query; avoid recursive probing.
+            try:
+                data = await self._fetch_115_files_json(params, fc_mix=1)
+                for row in self._parse_storage_entries(data.get("data") or data.get("files") or []):
+                    rid = str(row.get("id") or "")
+                    if row.get("is_dir") and rid in dir_ids:
+                        continue
+                    entries.append(row)
+                return parent_path, ancestors, entries
+            except Exception:
+                # If HTTP fallback is blocked by risk control, still return directories
+                # so user can continue selecting paths without hard failure.
+                return parent_path, ancestors, entries
+
+        params = {
+            "aid": 1,
+            "cid": parent_id,
+            "o": "user_ptime",
+            "asc": 1,
+            "offset": 0,
+            "limit": 200,
+            "show_dir": 1,
+            "type": 0,
+            "format": "json",
+            "star": 0,
+            "suffix": "",
+            "natsort": 0,
+            "snap": 0,
+            "record_open_time": 1,
+        }
+        try:
+            data = await self._fetch_115_files_json(params, fc_mix=1)
+            path_items = data.get("path") or []
+            if isinstance(path_items, list) and path_items:
+                parent_path = "/" + "/".join(str(x.get("name") or "") for x in path_items if isinstance(x, dict)).strip("/")
+            else:
+                parent_path = "/"
+            ancestors = self._parse_dir_ancestors(path_items, parent_id, parent_path)
+            return parent_path, ancestors, self._parse_storage_entries(data.get("data") or data.get("files") or [])
+        except (ProviderError, AuthError):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderError("C115_UPSTREAM_ERROR", f"115 list files failed: {exc}", 502) from exc
+
     async def list_share_items(self, source_uri: str, parent_id: str = "") -> list[dict]:
         share_code, receive_code = self._parse_share_link(source_uri)
         if self.settings.use_mock:
@@ -528,8 +832,7 @@ class C115Adapter:
                     {"id": "m2", "name": "字幕.ass", "size": 128 * 1024, "is_dir": False},
                 ]
             return [{"id": "m-folder", "name": "电影合集", "size": None, "is_dir": True}]
-        if not self.settings.c115_cookie:
-            raise AuthError("C115_AUTH_INVALID", "missing 115 cookie", 401)
+        self._ensure_cookie_ready()
         headers = {"Cookie": self.settings.c115_cookie}
         try:
             async with httpx.AsyncClient(
@@ -537,6 +840,7 @@ class C115Adapter:
                 follow_redirects=True,
                 trust_env=False,
             ) as client:
+                await self._wait_rate_limit()
                 resp = await client.get(
                     "https://webapi.115.com/share/snap",
                     params={
@@ -575,14 +879,93 @@ class C115Adapter:
         except Exception as exc:  # noqa: BLE001
             raise ProviderError("C115_UPSTREAM_ERROR", f"115 list share items failed: {exc}", 502) from exc
 
+    async def list_share_tree(self, source_uri: str, selected_ids: list[str] | None = None) -> list[dict]:
+        selected = set(selected_ids or [])
+        out: list[dict] = []
+
+        async def walk(parent_id: str, current_path: str) -> None:
+            for row in await self.list_share_items(source_uri, parent_id):
+                row_id = str(row.get("id") or "")
+                name = str(row.get("name") or row_id)
+                path = f"{current_path}/{name}".replace("//", "/")
+                if row.get("is_dir"):
+                    should_walk = not selected or row_id in selected or parent_id in selected or parent_id == ""
+                    if should_walk:
+                        await walk(row_id, path)
+                    continue
+                if selected and parent_id == "" and row_id not in selected:
+                    continue
+                out.append(
+                    {
+                        "id": row_id,
+                        "name": name,
+                        "path": path,
+                        "size": row.get("size"),
+                        "is_dir": False,
+                    }
+                )
+
+        if not selected:
+            await walk("", "")
+            return out
+
+        root_items = await self.list_share_items(source_uri, "")
+        root_map = {str(item.get("id") or ""): item for item in root_items}
+        for sel in selected:
+            row = root_map.get(sel)
+            if row and row.get("is_dir"):
+                await walk(sel, f"/{row.get('name') or sel}")
+            elif row:
+                out.append(
+                    {
+                        "id": sel,
+                        "name": row.get("name") or sel,
+                        "path": f"/{row.get('name') or sel}",
+                        "size": row.get("size"),
+                        "is_dir": False,
+                    }
+                )
+        return out
+
+    async def delete_files(self, file_ids: list[str]) -> int:
+        ids = [str(x).strip() for x in file_ids if str(x).strip()]
+        if not ids:
+            return 0
+        if self.settings.use_mock:
+            return len(ids)
+        self._ensure_cookie_ready()
+        try:
+            deleted = await self._delete_files_via_sdk(ids)
+            if deleted is not None:
+                return deleted
+        except ProviderError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("115_delete_sdk_unavailable_fallback err=%s", exc)
+        deleted = 0
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.settings.request_timeout_seconds,
+                follow_redirects=True,
+                trust_env=False,
+            ) as client:
+                for batch in self._chunk_ids(ids):
+                    deleted += await self._delete_files_via_http_batch(client, batch)
+            return deleted
+        except AuthError:
+            raise
+        except ProviderError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderError("C115_UPSTREAM_ERROR", f"115 delete failed: {exc}", 502) from exc
+
     async def save_share_items(
         self, source_uri: str, target_dir_id: str, selected_ids: list[str]
     ) -> str:
         share_code, receive_code = self._parse_share_link(source_uri)
         if self.settings.use_mock:
             return self.make_idempotency_key(source_uri, target_dir_id)[:16]
-        if not self.settings.c115_cookie:
-            raise AuthError("C115_AUTH_INVALID", "missing 115 cookie", 401)
+        self._ensure_cookie_ready()
         ids = selected_ids or [row["id"] for row in await self.list_share_items(source_uri)]
         if not ids:
             raise ValidationError("C115_SHARE_EMPTY", "分享内容为空", 400)
@@ -604,6 +987,7 @@ class C115Adapter:
                         "receive_code": receive_code,
                         "file_id": fid,
                     }
+                    await self._wait_rate_limit()
                     resp = await client.post(
                         "https://webapi.115.com/share/receive",
                         headers=headers,

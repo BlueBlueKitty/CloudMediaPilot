@@ -206,6 +206,50 @@ class QuarkAdapter:
             out.append({"id": self._encode_item_id(fid, token), "name": name, "size": size, "is_dir": is_dir})
         return out
 
+    async def list_share_tree(self, source_uri: str, selected_ids: list[str] | None = None) -> list[dict]:
+        selected = [str(x).strip() for x in (selected_ids or []) if str(x).strip()]
+        out: list[dict] = []
+
+        async def walk(parent_id: str, current_path: str) -> None:
+            for row in await self.list_share_items(source_uri, parent_id or "0"):
+                item_id = str(row.get("id") or "")
+                name = str(row.get("name") or item_id)
+                path = f"{current_path}/{name}".replace("//", "/")
+                if row.get("is_dir"):
+                    await walk(item_id, path)
+                    continue
+                out.append(
+                    {
+                        "id": item_id,
+                        "name": name,
+                        "path": path,
+                        "size": row.get("size"),
+                        "is_dir": False,
+                    }
+                )
+
+        if not selected:
+            await walk("0", "")
+            return out
+
+        root_items = await self.list_share_items(source_uri, "0")
+        root_map = {str(item.get("id") or ""): item for item in root_items}
+        for sel in selected:
+            row = root_map.get(sel)
+            if row and row.get("is_dir"):
+                await walk(sel, f"/{row.get('name') or sel}")
+            elif row:
+                out.append(
+                    {
+                        "id": sel,
+                        "name": row.get("name") or sel,
+                        "path": f"/{row.get('name') or sel}",
+                        "size": row.get("size"),
+                        "is_dir": False,
+                    }
+                )
+        return out
+
     async def save_selected_items(
         self, source_uri: str, target_dir_id: str, selected_ids: list[str]
     ) -> str:
@@ -268,6 +312,102 @@ class QuarkAdapter:
             message = str(save_body.get("message") or "quark save failed")
             raise ProviderError("QUARK_UPSTREAM_ERROR", message, 502)
         return f"quark-{pwd_id}-{target_dir_id or '0'}"
+
+    async def list_storage_entries(
+        self, parent_id: str = "0"
+    ) -> tuple[str, list[C115DirAncestor], list[dict]]:
+        if self.settings.use_mock:
+            if parent_id == "0":
+                return "/", [C115DirAncestor(id="0", path="/")], [
+                    {"id": "q100", "name": "电影", "size": None, "is_dir": True},
+                    {"id": "qf0", "name": "000A-夸克资源怎么找.png", "size": 123_456, "is_dir": False},
+                ]
+            return "/电影", [
+                C115DirAncestor(id="0", path="/"),
+                C115DirAncestor(id=str(parent_id), path="/电影"),
+            ], [
+                {"id": "qf1", "name": "正片.mkv", "size": 4 * 1024 * 1024 * 1024, "is_dir": False},
+                {"id": "qf2", "name": "打造千T高质量资源社区，点我查看社区地址.docx", "size": 2048, "is_dir": False},
+            ]
+        if not self.settings.quark_cookie:
+            raise AuthError("QUARK_AUTH_INVALID", "missing quark cookie", 401)
+
+        headers = {
+            "cookie": self.settings.quark_cookie,
+            "accept": "application/json, text/plain, */*",
+            "user-agent": "Mozilla/5.0",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+                resp = await client.get(
+                    "https://drive-h.quark.cn/1/clouddrive/file/sort",
+                    params={
+                        "pr": "ucpro",
+                        "fr": "pc",
+                        "uc_param_str": "",
+                        "pdir_fid": parent_id or "0",
+                        "_page": "1",
+                        "_size": "200",
+                        "_fetch_total": "false",
+                        "_fetch_sub_dirs": "1",
+                        "_sort": "",
+                        "__t": int(time.time() * 1000),
+                    },
+                    headers=headers,
+                )
+            resp.raise_for_status()
+            body = resp.json() if resp.content else {}
+            rows = ((body.get("data") or {}).get("list") if isinstance(body, dict) else None) or []
+            out: list[dict] = []
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    fid = str(row.get("fid") or "").strip()
+                    name = str(row.get("file_name") or "").strip()
+                    if not fid or not name:
+                        continue
+                    size_raw = row.get("size")
+                    size = int(size_raw) if isinstance(size_raw, int | float) else None
+                    is_dir = int(row.get("file_type") or 1) == 0
+                    out.append({"id": fid, "name": name, "size": size, "is_dir": is_dir})
+            parent_path = "/" if parent_id in {"0", ""} else f"/{parent_id}"
+            ancestors = [C115DirAncestor(id="0", path="/")]
+            if parent_id not in {"0", ""}:
+                ancestors.append(C115DirAncestor(id=parent_id, path=parent_path))
+            return parent_path, ancestors, out
+        except (ProviderError, AuthError):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderError("QUARK_UPSTREAM_ERROR", f"quark list files failed: {exc}", 502) from exc
+
+    async def delete_files(self, file_ids: list[str]) -> int:
+        ids = [str(x).strip() for x in file_ids if str(x).strip()]
+        if not ids:
+            return 0
+        if self.settings.use_mock:
+            return len(ids)
+        if not self.settings.quark_cookie:
+            raise AuthError("QUARK_AUTH_INVALID", "missing quark cookie", 401)
+        headers = {
+            "cookie": self.settings.quark_cookie,
+            "accept": "application/json, text/plain, */*",
+            "content-type": "application/json",
+            "user-agent": "Mozilla/5.0",
+        }
+        async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+            resp = await client.post(
+                "https://drive-h.quark.cn/1/clouddrive/file/delete",
+                params={"pr": "ucpro", "fr": "pc", "uc_param_str": "", "__t": int(time.time() * 1000)},
+                headers=headers,
+                json={"action_type": 2, "filelist": ids, "exclude_fids": []},
+            )
+        resp.raise_for_status()
+        body = resp.json() if resp.content else {}
+        if isinstance(body, dict) and str(body.get("status")) not in {"200", "0"}:
+            message = str(body.get("message") or "quark delete failed")
+            raise ProviderError("QUARK_UPSTREAM_ERROR", message, 502)
+        return len(ids)
 
     async def check(self) -> tuple[bool, str]:
         if self.settings.use_mock:

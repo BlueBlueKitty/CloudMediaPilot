@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>CloudMediaPilot</title>
     <link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
-    <link rel="stylesheet" href="/assets/app.css?v=20260601-04" />
+    <link rel="stylesheet" href="/assets/app.css?v=20260601-08" />
   </head>
   <body>
     <div class="layout">
@@ -124,6 +124,7 @@
             <button data-tab="media" class="active">媒体配置</button>
             <button data-tab="storage">网盘设置</button>
             <button data-tab="search">资源搜索</button>
+            <button data-tab="resource-filter">资源过滤</button>
             <button data-tab="system">系统配置</button>
           </div>
 
@@ -242,6 +243,49 @@
               </article>
             </section>
 
+            <section data-tab-pane="resource-filter" class="form-pane" hidden>
+              <article class="card form-card provider-card">
+                <div class="card-title-row">
+                  <h3>资源过滤</h3>
+                  <label class="title-toggle"><span>启用过滤</span><input id="resourceFilterEnabled" type="checkbox" class="toggle" /></label>
+                </div>
+                <div class="form-grid compact-grid single-column-grid">
+                  <div class="chip-box cleanup-box">
+                    <span>过滤规则</span>
+                    <div class="chip-toolbar">
+                      <button type="button" id="addFilterRuleBtn">新增规则</button>
+                      <button type="button" id="resetFilterRulesBtn">恢复默认</button>
+                    </div>
+                    <div id="filterRulesList" class="filter-rules-list"></div>
+                    <small class="hint">支持 glob 通配，如 `*.txt`、`*夸克*.png`，并可选最小/最大体积阈值（单位 MB）。</small>
+                  </div>
+                </div>
+              </article>
+
+              <article class="card form-card provider-card">
+                <div class="card-title-row">
+                  <h3>资源清理</h3>
+                </div>
+                <div class="cleanup-sections">
+                  <div class="cleanup-box">
+                    <h4>本地清理</h4>
+                    <div class="cleanup-line cleanup-line-local">
+                      <button type="button" id="cleanupPickLocalDirBtn">选择目录</button>
+                      <div id="cleanupLocalPath" class="dir-picked-line">未选择</div>
+                    </div>
+                    <div class="bulk-controls transfer-browser-toolbar">
+                      <button type="button" id="cleanupLocalPreviewBtn" class="btn-primary">预览本地清理</button>
+                      <button type="button" id="cleanupLocalExecuteBtn" class="btn-primary" disabled>执行清理</button>
+                      <button type="button" id="cleanupLocalStopBtn" class="btn-stop" hidden>停止</button>
+                      <span id="cleanupLocalStatusText"></span>
+                    </div>
+                  </div>
+                </div>
+                <label><span>清理日志 / 进度</span><textarea id="cleanupLogBox" rows="8" readonly placeholder="这里会显示执行进度和报错信息。"></textarea></label>
+                <div id="cleanupPreviewPanel" class="cleanup-preview-panel"></div>
+              </article>
+            </section>
+
             <section data-tab-pane="system" class="form-pane" hidden>
               <article class="card form-card provider-card">
                 <div class="card-title-row">
@@ -327,6 +371,6 @@
       </form>
     </div>
 
-    <script src="/assets/app.js?v=20260601-04" type="module"></script>
+    <script src="/assets/app.js?v=20260601-08" type="module"></script>
   </body>
 </html>

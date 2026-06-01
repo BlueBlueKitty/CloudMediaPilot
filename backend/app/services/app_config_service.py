@@ -40,6 +40,9 @@ _ENV_KEYS_ORDER = [
     "C115_OFFLINE_ADD_PATH",
     "C115_OFFLINE_LIST_PATH",
     "STORAGE_PROVIDERS",
+    "RESOURCE_FILTER_ENABLED",
+    "RESOURCE_FILTER_RULES",
+    "RESOURCE_CLEANUP_LOCAL_ROOTS",
     "QUARK_COOKIE",
     "TIANYI_USERNAME",
     "TIANYI_PASSWORD",
@@ -87,6 +90,9 @@ class AppConfig:
     c115_offline_add_path: str = "/lixianssp/?ac=add_task_url"
     c115_offline_list_path: str = "/web/lixian/?ac=task_lists"
     storage_providers: str = "115,quark,tianyi,123"
+    resource_filter_enabled: bool = True
+    resource_filter_rules: str = ""
+    resource_cleanup_local_roots: str = ""
     quark_cookie: str = ""
     tianyi_username: str = ""
     tianyi_password: str = ""
@@ -186,6 +192,9 @@ class AppConfigStore:
             "C115_OFFLINE_ADD_PATH": cfg.c115_offline_add_path,
             "C115_OFFLINE_LIST_PATH": cfg.c115_offline_list_path,
             "STORAGE_PROVIDERS": cfg.storage_providers,
+            "RESOURCE_FILTER_ENABLED": "true" if cfg.resource_filter_enabled else "false",
+            "RESOURCE_FILTER_RULES": cfg.resource_filter_rules,
+            "RESOURCE_CLEANUP_LOCAL_ROOTS": cfg.resource_cleanup_local_roots,
             "QUARK_COOKIE": cfg.quark_cookie,
             "TIANYI_USERNAME": cfg.tianyi_username,
             "TIANYI_PASSWORD": cfg.tianyi_password,
@@ -247,6 +256,15 @@ class AppConfigStore:
                     base.c115_offline_list_path,
                 ),
                 storage_providers=env.get("STORAGE_PROVIDERS", base.storage_providers),
+                resource_filter_enabled=_to_bool(
+                    env.get("RESOURCE_FILTER_ENABLED"),
+                    base.resource_filter_enabled,
+                ),
+                resource_filter_rules=env.get("RESOURCE_FILTER_RULES", base.resource_filter_rules),
+                resource_cleanup_local_roots=env.get(
+                    "RESOURCE_CLEANUP_LOCAL_ROOTS",
+                    base.resource_cleanup_local_roots,
+                ),
                 quark_cookie=env.get("QUARK_COOKIE", base.quark_cookie),
                 tianyi_username=env.get("TIANYI_USERNAME", base.tianyi_username),
                 tianyi_password=env.get("TIANYI_PASSWORD", base.tianyi_password),
@@ -303,6 +321,9 @@ class AppConfigStore:
         c115_offline_add_path: str | None = None,
         c115_offline_list_path: str | None = None,
         storage_providers: str | None = None,
+        resource_filter_enabled: bool | None = None,
+        resource_filter_rules: str | None = None,
+        resource_cleanup_local_roots: str | None = None,
         quark_cookie: str | None = None,
         tianyi_username: str | None = None,
         tianyi_password: str | None = None,
@@ -432,6 +453,21 @@ class AppConfigStore:
                     if storage_providers is not None
                     else current.storage_providers
                 ),
+                resource_filter_enabled=(
+                    resource_filter_enabled
+                    if resource_filter_enabled is not None
+                    else current.resource_filter_enabled
+                ),
+                resource_filter_rules=(
+                    resource_filter_rules
+                    if resource_filter_rules is not None
+                    else current.resource_filter_rules
+                ),
+                resource_cleanup_local_roots=(
+                    resource_cleanup_local_roots
+                    if resource_cleanup_local_roots is not None
+                    else current.resource_cleanup_local_roots
+                ),
                 quark_cookie=quark_cookie if quark_cookie is not None else current.quark_cookie,
                 tianyi_username=(
                     tianyi_username if tianyi_username is not None else current.tianyi_username
@@ -500,6 +536,9 @@ class AppConfigStore:
             "c115_offline_add_path": cfg.c115_offline_add_path,
             "c115_offline_list_path": cfg.c115_offline_list_path,
             "storage_providers": cfg.storage_providers,
+            "resource_filter_enabled": cfg.resource_filter_enabled,
+            "resource_filter_rules": cfg.resource_filter_rules,
+            "resource_cleanup_local_roots": cfg.resource_cleanup_local_roots,
             "quark_cookie_masked": _mask_secret(cfg.quark_cookie),
             "tianyi_username": cfg.tianyi_username,
             "tianyi_password_masked": _mask_secret(cfg.tianyi_password),
@@ -552,6 +591,9 @@ def build_provider_settings(_runtime: Settings, app_cfg: AppConfig) -> ProviderS
         c115_offline_add_path=app_cfg.c115_offline_add_path,
         c115_offline_list_path=app_cfg.c115_offline_list_path,
         storage_providers=app_cfg.storage_providers,
+        resource_filter_enabled=app_cfg.resource_filter_enabled,
+        resource_filter_rules=app_cfg.resource_filter_rules,
+        resource_cleanup_local_roots=app_cfg.resource_cleanup_local_roots,
         quark_cookie=app_cfg.quark_cookie,
         tianyi_username=app_cfg.tianyi_username,
         tianyi_password=app_cfg.tianyi_password,

@@ -62,6 +62,9 @@ class ProviderSettings:
     c115_offline_add_path: str
     c115_offline_list_path: str
     storage_providers: str
+    resource_filter_enabled: bool
+    resource_filter_rules: str
+    resource_cleanup_local_roots: str
     quark_cookie: str
     tianyi_username: str
     tianyi_password: str

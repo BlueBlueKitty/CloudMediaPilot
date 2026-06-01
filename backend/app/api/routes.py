@@ -1,4 +1,5 @@
 from importlib import metadata
+import json
 import os
 from pathlib import Path
 from typing import Protocol
@@ -6,7 +7,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.responses import Response
 
 from app.adapters.c115 import C115Adapter
@@ -18,6 +19,7 @@ from app.adapters.tmdb import TMDBAdapter
 from app.core.config import get_settings
 from app.core.deps import (
     get_app_config_store,
+    get_cleanup_service,
     get_provider_status_service,
     get_search_service,
     get_task_service,
@@ -26,6 +28,10 @@ from app.schemas.models import (
     AuthLoginRequest,
     AuthUserResponse,
     C115DirListResponse,
+    CleanupExecuteRequest,
+    CleanupExecuteResponse,
+    CleanupPreviewRequest,
+    CleanupPreviewResponse,
     ConnectionTestRequest,
     ConnectionTestResponse,
     ConnectionTestResult,
@@ -51,6 +57,7 @@ from app.schemas.models import (
 )
 from app.services.app_config_service import AppConfigStore, build_provider_settings, hash_password
 from app.services.auth_service import issue_session_token, parse_session_token, verify_password
+from app.services.cleanup_service import CleanupService
 from app.services.log_service import handler as memory_log_handler
 from app.services.provider_status_service import ProviderStatusService
 from app.services.search_service import SearchService
@@ -61,6 +68,26 @@ router = APIRouter()
 
 _WEBUI_INDEX = Path(__file__).resolve().parent.parent / "webui" / "index.html"
 _SESSION_COOKIE = "cmp_session"
+
+
+def _local_cleanup_roots(raw: str) -> list[Path]:
+    roots: list[Path] = []
+    if not raw:
+        return roots
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, list):
+        values = [str(x).strip() for x in parsed if str(x).strip()]
+    else:
+        values = [line.strip() for line in raw.splitlines() if line.strip()]
+    for text in values:
+        try:
+            roots.append(Path(text).resolve())
+        except Exception:  # noqa: BLE001
+            continue
+    return roots
 
 
 class _CheckableAdapter(Protocol):
@@ -355,6 +382,49 @@ async def commit_transfer(
     )
 
 
+@router.post("/cleanup/preview", response_model=CleanupPreviewResponse)
+async def cleanup_preview(
+    payload: CleanupPreviewRequest,
+    svc: CleanupService = Depends(get_cleanup_service),
+    _: str = Depends(_require_auth),
+) -> CleanupPreviewResponse:
+    return await svc.preview(
+        new_request_id(),
+        payload.provider,
+        payload.parent_id,
+        payload.local_root,
+    )
+
+
+@router.get("/cleanup/stream")
+async def cleanup_stream(
+    local_root: str = Query(..., max_length=1024),
+    svc: CleanupService = Depends(get_cleanup_service),
+    _: str = Depends(_require_auth),
+) -> StreamingResponse:
+    async def _generate():
+        rid = new_request_id()
+        try:
+            async for event_type, data in svc.stream_local_preview(rid, local_root):
+                if event_type == "log":
+                    yield f"event: log\ndata: {data}\n\n"
+                elif event_type in ("start", "match", "result", "error"):
+                    yield f"event: {event_type}\ndata: {data}\n\n"
+        except ValidationError as exc:
+            yield f"event: error\ndata: {exc.message}\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
+@router.post("/cleanup/execute", response_model=CleanupExecuteResponse)
+async def cleanup_execute(
+    payload: CleanupExecuteRequest,
+    svc: CleanupService = Depends(get_cleanup_service),
+    _: str = Depends(_require_auth),
+) -> CleanupExecuteResponse:
+    return await svc.execute(new_request_id(), payload.preview_token, payload.selected_ids)
+
+
 @router.get("/tasks/{task_id}", response_model=TaskStatusResponse)
 async def task_status(
     task_id: str,
@@ -395,6 +465,70 @@ async def storage_dirs(
     )
 
 
+@router.get("/storage/local-dirs", response_model=C115DirListResponse)
+async def storage_local_dirs(
+    parent_path: str = Query(default="", max_length=1024),
+    store: AppConfigStore = Depends(get_app_config_store),
+    _: str = Depends(_require_auth),
+) -> C115DirListResponse:
+    roots = _local_cleanup_roots(store.get().resource_cleanup_local_roots)
+    if not roots:
+        return C115DirListResponse(
+            request_id=new_request_id(),
+            parent_id="",
+            parent_path="/",
+            ancestors=[],
+            items=[],
+        )
+    current = None
+    if parent_path:
+        candidate = Path(parent_path).resolve()
+        if any(candidate == root or candidate.is_relative_to(root) for root in roots):
+            current = candidate
+    if current is None:
+        items = [
+            {"id": str(root), "name": root.name or str(root), "is_dir": True}
+            for root in roots
+            if root.exists()
+        ]
+        return C115DirListResponse(
+            request_id=new_request_id(),
+            parent_id="",
+            parent_path="/",
+            ancestors=[],
+            items=items,
+        )
+    if not current.exists() or not current.is_dir():
+        return C115DirListResponse(
+            request_id=new_request_id(),
+            parent_id=str(current),
+            parent_path=str(current),
+            ancestors=[],
+            items=[],
+        )
+    ancestors = []
+    for root in roots:
+        if current == root or current.is_relative_to(root):
+            rel_parts = current.relative_to(root).parts if current != root else ()
+            ancestors.append({"id": str(root), "path": str(root)})
+            cursor = root
+            for part in rel_parts:
+                cursor = cursor / part
+                ancestors.append({"id": str(cursor), "path": str(cursor)})
+            break
+    rows = []
+    for child in sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+        if child.is_dir():
+            rows.append({"id": str(child), "name": child.name, "is_dir": True})
+    return C115DirListResponse(
+        request_id=new_request_id(),
+        parent_id=str(current),
+        parent_path=str(current),
+        ancestors=ancestors,
+        items=rows,
+    )
+
+
 @router.get("/providers/status", response_model=ProviderStatusResponse)
 async def provider_status(
     svc: ProviderStatusService = Depends(get_provider_status_service),
@@ -416,6 +550,8 @@ async def get_app_settings(
             "prowlarr_api_key": cfg.prowlarr_api_key,
             "pansou_password": cfg.pansou_password,
             "c115_cookie": cfg.c115_cookie,
+            "resource_filter_rules": cfg.resource_filter_rules,
+            "resource_cleanup_local_roots": cfg.resource_cleanup_local_roots,
             "quark_cookie": cfg.quark_cookie,
             "tianyi_password": cfg.tianyi_password,
             "pan123_password": cfg.pan123_password,
@@ -464,6 +600,9 @@ async def update_app_settings(
         c115_offline_add_path=payload.c115_offline_add_path,
         c115_offline_list_path=payload.c115_offline_list_path,
         storage_providers=payload.storage_providers,
+        resource_filter_enabled=payload.resource_filter_enabled,
+        resource_filter_rules=payload.resource_filter_rules,
+        resource_cleanup_local_roots=payload.resource_cleanup_local_roots,
         quark_cookie=payload.quark_cookie,
         tianyi_username=payload.tianyi_username,
         tianyi_password=payload.tianyi_password,
@@ -481,6 +620,8 @@ async def update_app_settings(
             "prowlarr_api_key": next_cfg.prowlarr_api_key,
             "pansou_password": next_cfg.pansou_password,
             "c115_cookie": next_cfg.c115_cookie,
+            "resource_filter_rules": next_cfg.resource_filter_rules,
+            "resource_cleanup_local_roots": next_cfg.resource_cleanup_local_roots,
             "quark_cookie": next_cfg.quark_cookie,
             "tianyi_password": next_cfg.tianyi_password,
             "pan123_password": next_cfg.pan123_password,

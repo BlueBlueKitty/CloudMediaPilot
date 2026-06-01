@@ -35,6 +35,22 @@ const state = {
   },
 
   pansouCloudTypes: [],
+  resourceFilterRules: [],
+  cleanupPreviewTokens: { cloud: "", local: "" },
+  cleanupTarget: {
+    cloudProvider: "115",
+    parentId: "0",
+    parentPath: "/",
+    localRoot: "",
+  },
+  cleanupPhase: { cloud: "preview", local: "preview" },
+  cleanupAbort: { local: null },
+  cleanupSelected: [],
+  cleanupLogTail: {
+    timer: null,
+    startedAt: "",
+    seen: new Set(),
+  },
   imageMode: "direct",
   pendingTransferRow: null,
   dirPicker: {
@@ -67,6 +83,58 @@ const PANSOU_CLOUD_TYPE_OPTIONS = [
   ["mobile", "移动云盘"],
   ["xunlei", "迅雷网盘"],
   ["magnet", "磁力"],
+];
+
+const STORAGE_PROVIDER_LABELS = {
+  "115": "115 网盘",
+  quark: "夸克网盘",
+  tianyi: "天翼云盘",
+  "123": "123 网盘",
+  baidu: "百度网盘",
+  aliyun: "阿里云盘",
+  uc: "UC 网盘",
+  mobile: "移动云盘",
+  xunlei: "迅雷网盘",
+};
+const CLEANUP_IMPLEMENTED_PROVIDERS = new Set(["115", "quark"]);
+
+const DEFAULT_RESOURCE_FILTER_RULES = [
+  {
+    id: "doc-text-files",
+    name: "文档和文本文件",
+    enabled: true,
+    glob: "*.txt",
+    min_size_mb: null,
+    max_size_mb: null,
+    applies_to: "both",
+  },
+  {
+    id: "doc-word-files",
+    name: "Word 文档",
+    enabled: true,
+    glob: "*.docx",
+    min_size_mb: null,
+    max_size_mb: null,
+    applies_to: "both",
+  },
+  {
+    id: "ad-video-mp4",
+    name: "广告视频-mp4",
+    enabled: true,
+    glob: "*.mp4",
+    min_size_mb: null,
+    max_size_mb: 5,
+    applies_to: "both",
+  },
+  {
+    id: "ad-video-mkv",
+    name: "广告视频-mkv",
+    enabled: true,
+    glob: "*.mkv",
+    min_size_mb: null,
+    max_size_mb: 5,
+    applies_to: "both",
+  },
 ];
 
 const IMG_FALLBACK =
@@ -151,6 +219,51 @@ function formatBytes(size) {
   }
   const digits = value >= 100 || unitIndex === 0 ? 0 : value >= 10 ? 1 : 2;
   return `${value.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function deepClone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function defaultResourceFilterRules() {
+  return deepClone(DEFAULT_RESOURCE_FILTER_RULES);
+}
+
+function parseResourceFilterRules(raw) {
+  if (!raw) return defaultResourceFilterRules();
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return defaultResourceFilterRules();
+    return parsed.map((item, index) => {
+      let min = item.min_size_mb;
+      if (min === null || min === undefined || min === "") {
+        if (item.min_size_bytes !== null && item.min_size_bytes !== undefined && item.min_size_bytes !== "") {
+          min = Math.round(Number(item.min_size_bytes) / (1024 * 1024));
+        } else {
+          min = null;
+        }
+      }
+      let max = item.max_size_mb;
+      if (max === null || max === undefined || max === "") {
+        if (item.max_size_bytes !== null && item.max_size_bytes !== undefined && item.max_size_bytes !== "") {
+          max = Math.round(Number(item.max_size_bytes) / (1024 * 1024));
+        } else {
+          max = null;
+        }
+      }
+      return {
+        id: String(item.id || `custom-${index + 1}`),
+        name: String(item.name || `规则 ${index + 1}`),
+        enabled: item.enabled !== false,
+        glob: String(item.glob || "*"),
+        min_size_mb: min,
+        max_size_mb: max,
+        applies_to: ["transfer", "cleanup", "both"].includes(item.applies_to) ? item.applies_to : "both",
+      };
+    });
+  } catch {
+    return defaultResourceFilterRules();
+  }
 }
 
 function loadRememberedLogin() {
@@ -806,6 +919,271 @@ function syncPansouCloudTypesField() {
   document.getElementById("pansouCloudTypes").value = state.pansouCloudTypes.join(",");
 }
 
+function serializeFilterRules() {
+  return JSON.stringify(
+    state.resourceFilterRules.map((rule, index) => ({
+      id: String(rule.id || `rule-${index + 1}`),
+      name: String(rule.name || `规则 ${index + 1}`),
+      enabled: !!rule.enabled,
+      glob: String(rule.glob || "*"),
+      min_size_mb:
+        rule.min_size_mb === null || rule.min_size_mb === undefined || rule.min_size_mb === ""
+          ? null
+          : Number(rule.min_size_mb),
+      max_size_mb:
+        rule.max_size_mb === null || rule.max_size_mb === undefined || rule.max_size_mb === ""
+          ? null
+          : Number(rule.max_size_mb),
+      applies_to: ["transfer", "cleanup", "both"].includes(rule.applies_to) ? rule.applies_to : "both",
+    }))
+  );
+}
+
+function renderFilterRules() {
+  const root = document.getElementById("filterRulesList");
+  if (!root) return;
+  root.innerHTML = "";
+  if (!state.resourceFilterRules.length) {
+    root.innerHTML = '<div class="cleanup-preview-empty">暂无规则，点击“新增规则”开始配置。</div>';
+    return;
+  }
+  state.resourceFilterRules.forEach((rule, index) => {
+    const row = document.createElement("div");
+    row.className = "filter-rule-row";
+    row.innerHTML = `
+      <div class="filter-rule-head">
+        <strong>${escapeHtml(rule.name || `规则 ${index + 1}`)}</strong>
+        <label class="filter-rule-toggle"><input type="checkbox" data-key="enabled" ${rule.enabled ? "checked" : ""} /> 启用</label>
+      </div>
+      <div class="filter-rule-grid">
+        <label><span>规则名</span><input data-key="name" value="${escapeHtml(rule.name || "")}" /></label>
+        <label><span>Glob</span><input data-key="glob" value="${escapeHtml(rule.glob || "")}" placeholder="*.txt" /></label>
+        <label><span>最小体积 (MB)</span><input data-key="min_size_mb" type="number" min="0" step="1" value="${rule.min_size_mb ?? ""}" placeholder="MB" /></label>
+        <label><span>最大体积 (MB)</span><input data-key="max_size_mb" type="number" min="0" step="1" value="${rule.max_size_mb ?? ""}" placeholder="MB" /></label>
+        <button type="button" data-action="remove">删除</button>
+      </div>
+    `;
+    row.querySelectorAll("[data-key]").forEach((input) => {
+      input.onchange = () => {
+        const key = input.getAttribute("data-key");
+        if (!key) return;
+        const next = { ...state.resourceFilterRules[index] };
+        if (key === "enabled") next.enabled = !!input.checked;
+        else if (key === "min_size_mb" || key === "max_size_mb") {
+          next[key] = input.value === null || input.value === undefined || input.value === "" ? null : Number(input.value);
+        } else {
+          next[key] = input.value;
+        }
+        next.applies_to = "both";
+        state.resourceFilterRules[index] = next;
+        renderFilterRules();
+      };
+    });
+    row.querySelector('[data-action="remove"]').onclick = () => {
+      state.resourceFilterRules.splice(index, 1);
+      renderFilterRules();
+    };
+    root.appendChild(row);
+  });
+}
+
+function cleanupLocalRoots() {
+  return (state.settings.resource_cleanup_local_roots || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function renderCleanupLocalRoots() {
+  const select = document.getElementById("cleanupLocalRootSelect");
+  if (!select) return;
+  const roots = cleanupLocalRoots();
+  select.innerHTML = "";
+  roots.forEach((root) => {
+    const op = document.createElement("option");
+    op.value = root;
+    op.textContent = root;
+    select.appendChild(op);
+  });
+  select.value = roots.includes(state.cleanupTarget.localRoot) ? state.cleanupTarget.localRoot : "";
+  if (!select.value && roots.length) select.value = roots[0];
+  state.cleanupTarget.localRoot = select.value || "";
+}
+
+function renderCleanupTarget() {
+  renderCleanupLocalRoots();
+  const localPath = document.getElementById("cleanupLocalPath");
+  if (localPath) localPath.textContent = state.cleanupTarget.localRoot || "未选择";
+}
+
+function renderCleanupCloudProviderOptions() {
+  const select = document.getElementById("cleanupCloudProvider");
+  if (!select) return;
+  if (!select) return;
+  const configured = String(state.settings.storage_providers || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const providers = configured.length ? configured : ["115", "quark"];
+  select.innerHTML = "";
+  providers.forEach((provider) => {
+    const op = document.createElement("option");
+    op.value = provider;
+    const label = STORAGE_PROVIDER_LABELS[provider] || provider;
+    op.textContent = CLEANUP_IMPLEMENTED_PROVIDERS.has(provider)
+      ? label
+      : `${label}（暂未支持清理）`;
+    op.disabled = !CLEANUP_IMPLEMENTED_PROVIDERS.has(provider);
+    select.appendChild(op);
+  });
+  const available = providers.find((x) => CLEANUP_IMPLEMENTED_PROVIDERS.has(x)) || "115";
+  const next = providers.includes(state.cleanupTarget.cloudProvider)
+    ? state.cleanupTarget.cloudProvider
+    : available;
+  state.cleanupTarget.cloudProvider = next;
+  select.value = next;
+}
+
+function appendCleanupLog(message) {
+  const box = document.getElementById("cleanupLogBox");
+  if (!box) return;
+  const ts = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  box.value = `${box.value}${box.value ? "\n" : ""}[${ts}] ${message}`;
+  box.scrollTop = box.scrollHeight;
+}
+
+function stopCleanupLogTail() {
+  if (state.cleanupLogTail.timer) {
+    clearInterval(state.cleanupLogTail.timer);
+    state.cleanupLogTail.timer = null;
+  }
+}
+
+function resetCleanupLogTail() {
+  stopCleanupLogTail();
+  state.cleanupLogTail.startedAt = new Date().toISOString();
+  state.cleanupLogTail.seen = new Set();
+}
+
+function formatCleanupScanLog(row) {
+  const match = String(row.message || "").match(/^cleanup_scan_dir provider=([^\s]+) path=(.+)$/);
+  if (!match) return "";
+  const provider = match[1];
+  const path = match[2];
+  return `${provider} 扫描目录: ${path}`;
+}
+
+async function pumpCleanupLogs() {
+  const startedAt = state.cleanupLogTail.startedAt;
+  if (!startedAt) return;
+  try {
+    const data = await api("/logs?level=info&limit=300");
+    for (const row of data.items || []) {
+      if (row.logger !== "cleanup") continue;
+      if (!row.time || row.time < startedAt) continue;
+      const key = `${row.time}|${row.message}`;
+      if (state.cleanupLogTail.seen.has(key)) continue;
+      state.cleanupLogTail.seen.add(key);
+      const message = formatCleanupScanLog(row);
+      if (message) appendCleanupLog(message);
+    }
+  } catch {}
+}
+
+function startCleanupLogTail() {
+  resetCleanupLogTail();
+  state.cleanupLogTail.timer = setInterval(() => {
+    void pumpCleanupLogs();
+  }, 800);
+}
+
+function setCleanupActionButton(targetType) {
+  if (targetType === "cloud") {
+    const btn = document.getElementById("cleanupCloudActionBtn");
+    if (!btn) return;
+    const phase = state.cleanupPhase.cloud;
+    btn.textContent = phase === "execute" ? "执行网盘清理" : "预览网盘清理";
+  }
+}
+
+function buildCleanupRuleStatsFromItems(items) {
+  const statMap = new Map();
+  (items || []).forEach((item) => {
+    const ruleId = String(item.rule_id || "unknown");
+    const ruleName = String(item.rule_name || "未命名规则");
+    const key = `${ruleId}::${ruleName}`;
+    const current = statMap.get(key) || { rule_id: ruleId, rule_name: ruleName, count: 0, total_size: 0 };
+    current.count += 1;
+    current.total_size += item.size || 0;
+    statMap.set(key, current);
+  });
+  return Array.from(statMap.values()).sort((a, b) => b.count - a.count);
+}
+
+function renderCleanupPreview(data) {
+  const root = document.getElementById("cleanupPreviewPanel");
+  if (!root) return;
+  if (!data) {
+    root.innerHTML = "";
+    return;
+  }
+  const items = (data.items || []).slice(0, 120);
+  const allIds = items.map((x) => x.id);
+  if (data.preview_token) state.cleanupSelected = allIds;
+  const stats = `
+    <div class="transfer-browser-stats">
+      <div class="transfer-browser-stat"><span class="label">命中文件</span><span class="value">${data.total_matches || 0}</span></div>
+      <div class="transfer-browser-stat"><span class="label">总体积</span><span class="value">${formatBytes(data.total_size || 0)}</span></div>
+      <div class="transfer-browser-stat"><span class="label">已选</span><span class="value" id="cleanupSelectedCount">${allIds.length}</span></div>
+    </div>
+  `;
+  const ruleStats = (data.rules && data.rules.length) ? data.rules : buildCleanupRuleStatsFromItems(items);
+  const rules = ruleStats
+    .map((rule) => `<div class="cleanup-rule-chip"><strong>${escapeHtml(rule.rule_name)}</strong><span>${rule.count} 项 / ${formatBytes(rule.total_size || 0)}</span></div>`)
+    .join("");
+  const itemRows = items
+    .map((item) => {
+      const checked = state.cleanupSelected.includes(item.id) ? "checked" : "";
+      return `<label class="cleanup-preview-item cleanup-preview-selectable"><input type="checkbox" class="cleanup-item-cb" value="${escapeHtml(item.id)}" ${checked} /><span><strong>${escapeHtml(item.name)}</strong><div class="meta">${escapeHtml(item.path)} / ${escapeHtml(item.rule_name)} / ${formatBytes(item.size || 0)}</div></span></label>`;
+    })
+    .join("");
+  root.innerHTML = `
+    ${stats}
+    <div class="bulk-controls" style="margin-top:6px">
+      <button type="button" id="cleanupSelectAllBtn" class="btn-small">全选</button>
+      <button type="button" id="cleanupDeselectAllBtn" class="btn-small">取消全选</button>
+    </div>
+    <div class="cleanup-preview-list cleanup-rule-stats-line">${rules || '<div class="cleanup-preview-empty">暂无规则命中统计</div>'}</div>
+    <div class="cleanup-preview-list cleanup-preview-checklist">${itemRows || '<div class="cleanup-preview-empty">未命中任何可清理文件</div>'}</div>
+  `;
+  root.querySelectorAll(".cleanup-item-cb").forEach((cb) => {
+    cb.onchange = () => {
+      const id = cb.value;
+      if (cb.checked) {
+        if (!state.cleanupSelected.includes(id)) state.cleanupSelected.push(id);
+      } else {
+        state.cleanupSelected = state.cleanupSelected.filter((x) => x !== id);
+      }
+      const countEl = document.getElementById("cleanupSelectedCount");
+      if (countEl) countEl.textContent = state.cleanupSelected.length;
+    };
+  });
+  const selBtn = document.getElementById("cleanupSelectAllBtn");
+  if (selBtn) selBtn.onclick = () => {
+    state.cleanupSelected = allIds;
+    root.querySelectorAll(".cleanup-item-cb").forEach((cb) => { cb.checked = true; });
+    const countEl = document.getElementById("cleanupSelectedCount");
+    if (countEl) countEl.textContent = allIds.length;
+  };
+  const deselBtn = document.getElementById("cleanupDeselectAllBtn");
+  if (deselBtn) deselBtn.onclick = () => {
+    state.cleanupSelected = [];
+    root.querySelectorAll(".cleanup-item-cb").forEach((cb) => { cb.checked = false; });
+    const countEl = document.getElementById("cleanupSelectedCount");
+    if (countEl) countEl.textContent = "0";
+  };
+}
+
 function isMaskedSecret(value) {
   return !!value && /^\*+/.test(value);
 }
@@ -887,6 +1265,13 @@ async function loadSettings() {
   setSecretInput("tianyiPassword", data.tianyi_password || data.tianyi_password_masked || "");
   document.getElementById("pan123Username").value = data.pan123_username || "";
   setSecretInput("pan123Password", data.pan123_password || data.pan123_password_masked || "");
+  document.getElementById("resourceFilterEnabled").checked = data.resource_filter_enabled !== false;
+  state.resourceFilterRules = parseResourceFilterRules(data.resource_filter_rules || "");
+  renderFilterRules();
+  state.settings.resource_cleanup_local_roots = data.resource_cleanup_local_roots || "";
+  state.settings.storage_providers = data.storage_providers || state.settings.storage_providers || "";
+  renderCleanupCloudProviderOptions();
+  renderCleanupLocalRoots();
 
   document.getElementById("systemUsername").value = data.system_username || "admin";
   setSecretInput("systemPassword", "");
@@ -894,6 +1279,11 @@ async function loadSettings() {
   const proxy = splitProxyUrl(data.system_proxy_url || "");
   document.getElementById("systemProxyScheme").value = proxy.scheme;
   document.getElementById("systemProxyAddr").value = proxy.addr;
+  renderCleanupTarget();
+  state.cleanupPhase.cloud = "preview";
+  state.cleanupPhase.local = "preview";
+  setCleanupActionButton("cloud");
+  setCleanupActionButton("local");
 
   showMaskedHint("tmdbApiKeyHint", "TMDB Key", data.tmdb_api_key_masked || "");
   showMaskedHint("prowlarrApiKeyHint", "Prowlarr Key", data.prowlarr_api_key_masked || "");
@@ -924,7 +1314,10 @@ async function saveSettings(event) {
     prowlarr_use_proxy: document.getElementById("prowlarrUseProxy").checked,
 
     c115_base_url: document.getElementById("c115BaseUrl").value.trim(),
-    storage_providers: "115,quark,tianyi,123",
+    storage_providers: state.settings.storage_providers || "115,quark,tianyi,123",
+    resource_filter_enabled: document.getElementById("resourceFilterEnabled").checked,
+    resource_filter_rules: serializeFilterRules(),
+    resource_cleanup_local_roots: state.settings.resource_cleanup_local_roots || "",
     tianyi_username: document.getElementById("tianyiUsername").value.trim(),
     pan123_username: document.getElementById("pan123Username").value.trim(),
 
@@ -951,12 +1344,23 @@ async function saveSettings(event) {
   if (tianyiPassword && !isMaskedSecret(tianyiPassword)) payload.tianyi_password = tianyiPassword;
   if (pan123Password && !isMaskedSecret(pan123Password)) payload.pan123_password = pan123Password;
 
+  const passwordChanged = !!systemPassword && !isMaskedSecret(systemPassword);
   try {
     await api("/settings", { method: "PUT", body: JSON.stringify(payload) });
+    if (passwordChanged) {
+      setStatus("设置已保存，请重新登录");
+      setTimeout(() => { window.location.href = "/"; }, 1500);
+      return;
+    }
     await loadSettings();
     setStatus("设置已保存");
   } catch (error) {
-    setStatus(`保存设置失败：${error.message}`, "warn");
+    if (passwordChanged) {
+      setStatus("设置已保存，请重新登录");
+      setTimeout(() => { window.location.href = "/"; }, 1500);
+    } else {
+      setStatus(`保存设置失败：${error.message}`, "warn");
+    }
   }
 }
 
@@ -1069,6 +1473,9 @@ async function doLogin(event) {
 }
 
 async function loadDirList(parentId, provider) {
+  if (provider === "local") {
+    return await api(`/storage/local-dirs?parent_path=${encodeURIComponent(parentId || "")}`);
+  }
   return await api(
     `/storage/dirs?parent_id=${encodeURIComponent(parentId)}&provider=${encodeURIComponent(provider)}`
   );
@@ -1146,8 +1553,10 @@ async function renderDirPicker() {
       btn.className = "dir-item";
       btn.textContent = item.name;
       btn.onclick = async () => {
-        const nextPath = (current.path === "/" ? "" : current.path) + "/" + item.name;
-        state.dirPicker.stack.push({ id: item.id, path: nextPath.replaceAll("//", "/") });
+        const nextPath = state.dirPicker.provider === "local"
+          ? (item.id || item.name || "/")
+          : ((current.path === "/" ? "" : current.path) + "/" + item.name).replaceAll("//", "/");
+        state.dirPicker.stack.push({ id: item.id, path: nextPath });
         await renderDirPicker();
       };
       listBox.appendChild(btn);
@@ -1339,10 +1748,184 @@ async function doTransferCommit(sourceUri, targetDirId, selectedIds, cloudType) 
         cloud_type: cloudType || "",
       }),
     });
-    setTransferToast("转存成功，任务ID: " + result.task_id);
+    const summary = [`任务ID: ${result.task_id}`];
+    if (typeof result.kept_count === "number") summary.push(`保留 ${result.kept_count} 项`);
+    if (typeof result.skipped_count === "number" && result.skipped_count > 0) {
+      summary.push(`跳过 ${result.skipped_count} 项`);
+    }
+    if (Array.isArray(result.skipped_rules_summary) && result.skipped_rules_summary.length) {
+      summary.push(`规则 ${result.skipped_rules_summary.join("，")}`);
+    }
+    setTransferToast("转存成功，" + summary.join(" / "));
   } catch (error) {
     setTransferToast("转存失败: " + error.message, "warn");
   }
+}
+
+async function previewCleanup(targetType) {
+  const provider =
+    targetType === "local"
+      ? "local"
+      : document.getElementById("cleanupCloudProvider").value;
+  if (targetType === "local") {
+    if (!state.cleanupTarget.localRoot) throw new Error("请先选择本地目录");
+    appendCleanupLog(`本地开始扫描目录: ${state.cleanupTarget.localRoot}`);
+    const es = new EventSource(`/cleanup/stream?local_root=${encodeURIComponent(state.cleanupTarget.localRoot)}`, { withCredentials: true });
+    state.cleanupAbort.local = () => {
+      stopped = true;
+      es.close();
+    };
+    document.getElementById("cleanupLocalStopBtn").hidden = false;
+    document.getElementById("cleanupLocalExecuteBtn").disabled = true;
+    let lastResult = null;
+    let stopped = false;
+    let matchItems = [];
+    let matchToken = "";
+    await new Promise((resolve, reject) => {
+      es.addEventListener("start", (e) => {
+        matchToken = e.data;
+        state.cleanupPreviewTokens.local = e.data;
+      });
+      es.addEventListener("log", (e) => {
+        if (stopped) return;
+        appendCleanupLog(e.data);
+      });
+      es.addEventListener("match", (e) => {
+        if (stopped) return;
+        const item = JSON.parse(e.data);
+        matchItems.push(item);
+        appendCleanupLog(`命中: ${item.name} (${item.rule_name})`);
+      });
+      es.addEventListener("result", (e) => {
+        lastResult = JSON.parse(e.data);
+        es.close();
+        resolve();
+      });
+      es.addEventListener("error", (e) => {
+        const msg = (e && e.data) || "连接异常";
+        if (stopped) { resolve(); return; }
+        appendCleanupLog(`扫描错误：${msg}`);
+        es.close();
+        reject(new Error(msg));
+      });
+      es.onerror = () => {
+        if (es.readyState === EventSource.CLOSED && !lastResult) {
+          if (stopped) { resolve(); return; }
+          if (state.cleanupPreviewTokens.local) {
+            resolve();
+            return;
+          }
+          es.close();
+          reject(new Error("扫描连接中断"));
+        }
+      };
+    });
+    state.cleanupAbort.local = null;
+    document.getElementById("cleanupLocalStopBtn").hidden = true;
+    if (stopped || !lastResult) {
+      if (state.cleanupPreviewTokens.local) {
+        const stoppedRules = buildCleanupRuleStatsFromItems(matchItems);
+        renderCleanupPreview({
+          preview_token: state.cleanupPreviewTokens.local,
+          total_matches: matchItems.length,
+          total_size: matchItems.reduce((sum, item) => sum + (item.size || 0), 0),
+          rules: stoppedRules,
+          items: matchItems,
+        });
+        appendCleanupLog(`本地扫描已停止，已匹配 ${matchItems.length} 项`);
+        const status = document.getElementById("cleanupLocalStatusText");
+        if (status) status.textContent = `扫描已停止，${matchItems.length} 项`;
+        document.getElementById("cleanupLocalExecuteBtn").disabled = matchItems.length === 0;
+      } else {
+        appendCleanupLog("本地扫描已停止");
+      }
+      return;
+    }
+    const data = lastResult;
+    if (!data) throw new Error("未收到扫描结果");
+    state.cleanupPreviewTokens.local = data.preview_token || "";
+    renderCleanupPreview(data);
+    const status = document.getElementById("cleanupLocalStatusText");
+    if (status) status.textContent = `命中 ${data.total_matches || 0} 项`;
+    appendCleanupLog(`本地预览完成：命中 ${data.total_matches || 0} 项`);
+    document.getElementById("cleanupLocalExecuteBtn").disabled = false;
+    return data;
+  }
+  if (!CLEANUP_IMPLEMENTED_PROVIDERS.has(provider)) {
+    throw new Error("该网盘暂未支持清理");
+  }
+  appendCleanupLog(`网盘开始扫描目录: ${state.cleanupTarget.parentPath || "/"}`);
+  startCleanupLogTail();
+  let data;
+  try {
+    data = await api("/cleanup/preview", {
+      method: "POST",
+      body: JSON.stringify({ provider, parent_id: state.cleanupTarget.parentId || "0" }),
+    });
+    await pumpCleanupLogs();
+  } finally {
+    stopCleanupLogTail();
+  }
+  state.cleanupPreviewTokens.cloud = data.preview_token || "";
+  renderCleanupPreview(data);
+  const status = document.getElementById("cleanupCloudStatusText");
+  if (status) status.textContent = `命中 ${data.total_matches || 0} 项`;
+  appendCleanupLog(`网盘预览完成：命中 ${data.total_matches || 0} 项`);
+  state.cleanupPhase.cloud = "execute";
+  setCleanupActionButton("cloud");
+  return data;
+}
+
+async function executeCleanup(targetType) {
+  if (targetType === "local") {
+    const token = state.cleanupPreviewTokens.local;
+    if (!token) throw new Error("请先执行本地预览");
+    const selectedIds = state.cleanupSelected.slice();
+    appendCleanupLog(`本地清理开始: ${state.cleanupTarget.localRoot || "-"}`);
+    const controller = new AbortController();
+    state.cleanupAbort.local = () => { controller.abort(); };
+    document.getElementById("cleanupLocalStopBtn").hidden = false;
+    let data;
+    try {
+      data = await fetch("/cleanup/execute", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ preview_token: token, selected_ids: selectedIds }),
+        signal: controller.signal,
+      }).then(r => { if (!r.ok) throw new Error("请求失败"); return r.json(); });
+    } catch (err) {
+      if (err.name === "AbortError") {
+        appendCleanupLog("本地清理已停止");
+        state.cleanupAbort.local = null;
+        document.getElementById("cleanupLocalStopBtn").hidden = true;
+        return;
+      }
+      throw err;
+    }
+    state.cleanupAbort.local = null;
+    document.getElementById("cleanupLocalStopBtn").hidden = true;
+    state.cleanupPreviewTokens.local = "";
+    const status = document.getElementById("cleanupLocalStatusText");
+    if (status) status.textContent = `已删除 ${data.deleted_count || 0} 项`;
+    appendCleanupLog(`本地清理完成：删除 ${data.deleted_count || 0} 项`);
+    state.cleanupPhase.local = "preview";
+    document.getElementById("cleanupLocalExecuteBtn").disabled = true;
+    return data;
+  }
+  if (!state.cleanupPreviewTokens.cloud) throw new Error("请先执行网盘扫描预览");
+  appendCleanupLog("网盘清理开始");
+  const data = await api("/cleanup/execute", {
+    method: "POST",
+    body: JSON.stringify({ preview_token: state.cleanupPreviewTokens.cloud }),
+  });
+  state.cleanupPreviewTokens.cloud = "";
+  const status = document.getElementById("cleanupCloudStatusText");
+  if (status) status.textContent = `已删除 ${data.deleted_count || 0} 项`;
+  appendCleanupLog(`网盘清理完成：删除 ${data.deleted_count || 0} 项`);
+  state.cleanupPhase.cloud = "preview";
+  setCleanupActionButton("cloud");
+  return data;
 }
 
 function selectedRows() {
@@ -1604,6 +2187,95 @@ function bindEvents() {
     if (!state.pansouCloudTypes.includes(value)) state.pansouCloudTypes.push(value);
     syncPansouCloudTypesField();
     renderPansouCloudTypeChips();
+  };
+  document.getElementById("addFilterRuleBtn").onclick = () => {
+    state.resourceFilterRules.push({
+      id: `custom-${Date.now()}`,
+      name: "新规则",
+      enabled: true,
+      glob: "",
+      min_size_mb: null,
+      max_size_mb: null,
+      applies_to: "both",
+    });
+    renderFilterRules();
+  };
+  document.getElementById("resetFilterRulesBtn").onclick = () => {
+    state.resourceFilterRules = defaultResourceFilterRules();
+    renderFilterRules();
+  };
+  document.getElementById("cleanupPickLocalDirBtn").onclick = async () => {
+    await openDirPicker(
+      state.cleanupTarget.localRoot || "",
+      state.cleanupTarget.localRoot || "/",
+      "local",
+      "",
+      async (choice) => {
+        state.cleanupTarget.localRoot = choice.id || "";
+        state.cleanupPreviewTokens.local = "";
+        state.cleanupPhase.local = "preview";
+        document.getElementById("cleanupLocalExecuteBtn").disabled = true;
+        renderCleanupPreview(null);
+        renderCleanupTarget();
+        appendCleanupLog(`本地起始目录：${state.cleanupTarget.localRoot || "-"}`);
+      }
+    );
+  };
+  const cloudBtn = document.getElementById("cleanupCloudActionBtn");
+  if (cloudBtn) cloudBtn.onclick = async () => {
+    try {
+      if (state.cleanupPhase.cloud === "preview") {
+        await previewCleanup("cloud");
+        setStatus("网盘清理预览完成");
+      } else {
+        if (!state.cleanupPreviewTokens.cloud) {
+          appendCleanupLog("请先执行网盘扫描预览，再执行清理");
+          setStatus("请先执行网盘扫描预览", "warn");
+          return;
+        }
+        const data = await executeCleanup("cloud");
+        setStatus(`网盘清理完成，已删除 ${data.deleted_count || 0} 项`);
+        renderCleanupPreview(null);
+      }
+    } catch (error) {
+      appendCleanupLog(`网盘清理失败：${error.message}`);
+      setStatus(`网盘清理失败：${error.message}`, "warn");
+    }
+  };
+  document.getElementById("cleanupLocalPreviewBtn").onclick = async () => {
+    try {
+      document.getElementById("cleanupLocalExecuteBtn").disabled = true;
+      renderCleanupPreview(null);
+      await previewCleanup("local");
+      setStatus("本地清理预览完成");
+    } catch (error) {
+      appendCleanupLog(`本地清理失败：${error.message}`);
+      setStatus(`清理失败：${error.message}`, "warn");
+    }
+  };
+  document.getElementById("cleanupLocalExecuteBtn").onclick = async () => {
+    try {
+      if (!state.cleanupPreviewTokens.local) {
+        appendCleanupLog("请先执行本地预览，再执行清理");
+        setStatus("请先执行本地预览", "warn");
+        return;
+      }
+      const data = await executeCleanup("local");
+      setStatus(`本地清理完成，已删除 ${data.deleted_count || 0} 项`);
+      renderCleanupPreview(null);
+    } catch (error) {
+      appendCleanupLog(`本地清理失败：${error.message}`);
+      setStatus(`清理失败：${error.message}`, "warn");
+    }
+  };
+  document.getElementById("cleanupLocalStopBtn").onclick = () => {
+    const abort = state.cleanupAbort.local;
+    if (abort) {
+      appendCleanupLog("正在停止...");
+      abort();
+      state.cleanupAbort.local = null;
+    }
+    document.getElementById("cleanupLocalStopBtn").hidden = true;
   };
 
   document.getElementById("dirPickerBackBtn").onclick = async () => {
