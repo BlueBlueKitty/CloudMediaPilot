@@ -1572,11 +1572,66 @@ async function testProvider(provider) {
   }
 }
 
-async function loadAppInfo() {
+function renderReleaseNotes(data) {
+  const root = document.getElementById("releaseNotesBox");
+  if (!root) return;
+  const productName = String(data?.product_name || "CloudMediaPilot");
+  const currentVersion = String(data?.current_version || "unknown");
+  const notes = Array.isArray(data?.release_notes) ? data.release_notes : [];
+  const normalized = notes.filter((item) => item && typeof item === "object");
+  if (!normalized.length) {
+    root.innerHTML = `
+      <div class="release-notes-header">
+        <b>${escapeHtml(productName)}</b>
+        <span>当前版本：${escapeHtml(currentVersion)}</span>
+      </div>
+      <div class="release-notes-empty">暂无版本更新说明</div>
+    `;
+    return;
+  }
+  const itemsHtml = normalized
+    .map((item) => {
+      const version = escapeHtml(String(item.version || "-"));
+      const date = escapeHtml(String(item.date || "-"));
+      const changes = Array.isArray(item.changes) ? item.changes : [];
+      const changeItems = changes.length
+        ? changes.map((change) => `<li>${escapeHtml(String(change || ""))}</li>`).join("")
+        : "<li>暂无更新条目</li>";
+      return `
+        <article class="release-note-item">
+          <div class="release-note-head">
+            <strong>v${version}</strong>
+            <span>${date}</span>
+          </div>
+          <ul>${changeItems}</ul>
+        </article>
+      `;
+    })
+    .join("");
+  root.innerHTML = `
+    <div class="release-notes-header">
+      <b>${escapeHtml(productName)}</b>
+      <span>当前版本：${escapeHtml(currentVersion)}</span>
+    </div>
+    <div class="release-notes-list">${itemsHtml}</div>
+  `;
+}
+
+async function loadReleaseNotes() {
+  const root = document.getElementById("releaseNotesBox");
+  if (!root) return;
   try {
-    const data = await api("/app/info");
-    document.getElementById("appVersion").textContent = `${data.name || "CloudMediaPilot"} v${data.version || "-"}`;
-  } catch {}
+    const data = await api("/app/release-notes");
+    renderReleaseNotes(data);
+  } catch (error) {
+    root.innerHTML = `
+      <div class="release-notes-header">
+        <b>CloudMediaPilot</b>
+        <span>当前版本：unknown</span>
+      </div>
+      <div class="release-notes-empty">版本说明加载失败：${escapeHtml(error.message || "未知错误")}</div>
+    `;
+  }
 }
 
 async function doLogout() {
@@ -2528,7 +2583,7 @@ async function bootstrapAfterLogin() {
   const initialPage = location.hash.replace("#", "") || "search";
   await loadSettings();
   await loadRecommendCategories();
-  await loadAppInfo();
+  await loadReleaseNotes();
   switchSettingsTab("media");
   showPage(initialPage);
 }

@@ -182,7 +182,6 @@ body.dark-theme {
   gap: 8px;
   margin-bottom: 12px;
 }
-.topbar span { margin-right: auto; color: var(--muted); font-weight: 700; }
 .page {
   display: grid;
   gap: 14px;
@@ -1114,7 +1113,6 @@ button { cursor: pointer; white-space: nowrap; }
   padding: var(--space-5);
   padding-bottom: calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
 }
-.topbar span { color: var(--text-3); }
 .card {
   border: 1px solid var(--line-1);
   border-radius: var(--radius-lg);
@@ -1368,6 +1366,53 @@ textarea:focus-visible,
 }
 .resource-title { color: var(--text-1); }
 .resource-sub, .meta-line, .hint, .test-result, .dir-picked-line { color: var(--text-3); }
+
+.release-notes-box {
+  display: grid;
+  gap: 10px;
+}
+.release-notes-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-3);
+}
+.release-notes-list {
+  display: grid;
+  gap: 10px;
+}
+.release-note-item {
+  border: 1px solid var(--line-1);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+}
+.release-note-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.release-note-head strong {
+  color: var(--text-1);
+}
+.release-note-head span {
+  color: var(--text-3);
+  font-size: 0.86rem;
+}
+.release-note-item ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  color: var(--text-2);
+}
+.release-notes-empty {
+  color: var(--text-3);
+}
 .resource-actions { flex-wrap: wrap; justify-content: flex-end; }
 .trend-card {
   background: var(--surface-1);

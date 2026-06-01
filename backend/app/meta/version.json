@@ -1,0 +1,34 @@
+{
+  "product_name": "CloudMediaPilot",
+  "current_version": "0.1.4",
+  "release_notes": [
+    {
+      "version": "0.1.1",
+      "date": "2026-04-01",
+      "changes": [
+        "项目创建"  ]
+    },
+    {
+      "version": "0.1.2",
+      "date": "2026-05-01",
+      "changes": [
+        "修复磁力转115网盘转存失败问题，优化软件体验"
+      ]
+    },
+    {
+      "version": "0.1.3",
+      "date": "2026-06-01",
+      "changes": [
+        "优化UI界面，提升移动端用户体验"
+      ]
+    },
+    {
+      "version": "0.1.4",
+      "date": "2026-06-02",
+      "changes": [
+        "增加版本更新日志功能，增加浅色/深色模式切换开关"
+      ]
+    }
+
+  ]
+}

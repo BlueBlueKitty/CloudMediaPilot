@@ -67,6 +67,7 @@ from app.utils.ids import new_request_id
 router = APIRouter()
 
 _WEBUI_INDEX = Path(__file__).resolve().parent.parent / "webui" / "index.html"
+_VERSION_META_FILE = Path(__file__).resolve().parent.parent / "meta" / "version.json"
 _SESSION_COOKIE = "cmp_session"
 
 
@@ -102,6 +103,55 @@ def _app_version() -> str:
         return metadata.version("cloudmediapilot-backend")
     except metadata.PackageNotFoundError:
         return "0.1.0"
+
+
+def _release_notes_payload() -> dict:
+    fallback = {
+        "product_name": "CloudMediaPilot",
+        "current_version": "unknown",
+        "release_notes": [],
+    }
+    try:
+        raw = json.loads(_VERSION_META_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return fallback
+    if not isinstance(raw, dict):
+        return fallback
+    product_name = raw.get("product_name")
+    current_version = raw.get("current_version")
+    release_notes = raw.get("release_notes")
+    if not isinstance(product_name, str) or not product_name.strip():
+        return fallback
+    if not isinstance(current_version, str) or not current_version.strip():
+        return fallback
+    if not isinstance(release_notes, list):
+        return fallback
+    normalized_notes: list[dict] = []
+    for item in release_notes:
+        if not isinstance(item, dict):
+            continue
+        version = item.get("version")
+        date = item.get("date")
+        changes = item.get("changes")
+        if not isinstance(version, str) or not version.strip():
+            continue
+        if not isinstance(date, str) or not date.strip():
+            continue
+        if not isinstance(changes, list):
+            continue
+        normalized_changes = [str(change).strip() for change in changes if str(change).strip()]
+        normalized_notes.append(
+            {
+                "version": version.strip(),
+                "date": date.strip(),
+                "changes": normalized_changes,
+            }
+        )
+    return {
+        "product_name": product_name.strip(),
+        "current_version": current_version.strip(),
+        "release_notes": normalized_notes,
+    }
 
 
 def _require_auth(request: Request, store: AppConfigStore = Depends(get_app_config_store)) -> str:
@@ -633,6 +683,11 @@ async def update_app_settings(
 @router.get("/app/info")
 async def app_info(_: str = Depends(_require_auth)) -> dict:
     return {"name": "CloudMediaPilot", "version": _app_version()}
+
+
+@router.get("/app/release-notes")
+async def app_release_notes(_: str = Depends(_require_auth)) -> dict:
+    return _release_notes_payload()
 
 
 @router.get("/logs")
