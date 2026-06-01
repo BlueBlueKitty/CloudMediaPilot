@@ -1,10 +1,10 @@
 #!/usr/bin/env pwsh
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
 param(
   [string]$Version = $null
 )
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
 
 $DockerhubUser = if ($env:DOCKERHUB_USER) { $env:DOCKERHUB_USER } else { "bluebluekitty" }
 $ImageName = if ($env:IMAGE_NAME) { $env:IMAGE_NAME } else { "cloudmediapilot" }
