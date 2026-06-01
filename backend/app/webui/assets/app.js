@@ -149,7 +149,38 @@ const IMG_FALLBACK =
 const statusBox = document.getElementById("status");
 const nav = document.getElementById("nav");
 const LOGIN_REMEMBER_KEY = "cmp_login_remember_v1";
+const THEME_STORAGE_KEY = "cmp_theme_mode_v1";
 const modalFocusStack = new Map();
+
+function resolvePreferredTheme() {
+  const saved = localStorage.getItem(THEME_STORAGE_KEY);
+  if (saved === "dark" || saved === "light") return saved;
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(theme) {
+  const normalized = theme === "dark" ? "dark" : "light";
+  document.body.classList.toggle("dark-theme", normalized === "dark");
+  document.body.classList.toggle("light-theme", normalized === "light");
+  const toggleBtn = document.getElementById("themeToggleBtn");
+  if (toggleBtn) {
+    const nextTheme = normalized === "dark" ? "light" : "dark";
+    toggleBtn.textContent = normalized === "dark" ? "浅色模式" : "深色模式";
+    toggleBtn.setAttribute("aria-label", `切换到${nextTheme === "dark" ? "深色" : "浅色"}模式`);
+    toggleBtn.setAttribute("title", `切换到${nextTheme === "dark" ? "深色" : "浅色"}模式`);
+  }
+}
+
+function initTheme() {
+  applyTheme(resolvePreferredTheme());
+}
+
+function toggleTheme() {
+  const isDark = document.body.classList.contains("dark-theme");
+  const next = isDark ? "light" : "dark";
+  localStorage.setItem(THEME_STORAGE_KEY, next);
+  applyTheme(next);
+}
 
 function setStatus(message, level = "ok") {
   statusBox.hidden = false;
@@ -2327,6 +2358,10 @@ function bindEvents() {
     };
   });
   document.getElementById("logoutBtn").onclick = doLogout;
+  const themeToggleBtn = document.getElementById("themeToggleBtn");
+  if (themeToggleBtn) {
+    themeToggleBtn.onclick = toggleTheme;
+  }
   document.getElementById("showLogsBtn").onclick = async () => {
     setModalVisibility("logsModal", true);
     await loadLogs();
@@ -2499,6 +2534,7 @@ async function bootstrapAfterLogin() {
 }
 
 async function init() {
+  initTheme();
   applyFormAccessibilityDefaults();
   bindModalEscapeClose();
   bindEvents();

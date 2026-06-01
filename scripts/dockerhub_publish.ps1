@@ -8,12 +8,16 @@ $ErrorActionPreference = "Stop"
 
 $DockerhubUser = if ($env:DOCKERHUB_USER) { $env:DOCKERHUB_USER } else { "bluebluekitty" }
 $ImageName = if ($env:IMAGE_NAME) { $env:IMAGE_NAME } else { "cloudmediapilot" }
-$Version = if ($Version) { $Version } elseif ($env:VERSION) { $env:VERSION } else { "0.1.0" }
+$Version = if ($Version) { $Version } elseif ($env:VERSION) { $env:VERSION } else { $null }
 $Dockerfile = if ($env:DOCKERFILE) { $env:DOCKERFILE } else { "backend/Dockerfile" }
 $Context = if ($env:CONTEXT) { $env:CONTEXT } else { "." }
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
-  Write-Error "用法: .\scripts\dockerhub_publish.ps1 <version>`n示例: .\scripts\dockerhub_publish.ps1 0.1.1"
+  $Version = Read-Host "请输入版本号 (例如 0.1.1)"
+}
+
+if ([string]::IsNullOrWhiteSpace($Version)) {
+  Write-Error "版本号不能为空。用法: .\scripts\dockerhub_publish.ps1 <version>`n示例: .\scripts\dockerhub_publish.ps1 0.1.1"
   exit 1
 }
 
