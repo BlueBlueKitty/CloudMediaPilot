@@ -8,52 +8,56 @@
     <link rel="stylesheet" href="/assets/app.css?v=20260601-08" />
   </head>
   <body>
+    <a class="skip-link" href="#mainContent">跳到主要内容</a>
     <div class="layout">
       <aside class="sidebar">
         <div class="brand-wrap">
           <div class="brand"><img src="/assets/logo.svg" alt="logo" class="brand-logo" /><span>CloudMediaPilot</span></div>
           <div class="sub">资源搜索转存助手</div>
         </div>
-        <nav id="nav" class="nav">
-          <button data-page="recommend" class="active">推荐</button>
-          <button data-page="search">搜索</button>
-          <button data-page="settings">设置</button>
+        <nav id="nav" class="nav" aria-label="主导航">
+          <button data-page="search" class="active" aria-label="打开搜索页面">搜索</button>
+          <button data-page="recommend" aria-label="打开推荐页面">推荐</button>
+          <button data-page="settings" aria-label="打开设置页面">设置</button>
         </nav>
       </aside>
 
-      <main class="main">
+      <main id="mainContent" class="main" tabindex="-1">
         <div class="topbar">
           <span id="appVersion">CloudMediaPilot</span>
           <button id="showLogsBtn" type="button">日志查看</button>
           <button id="logoutBtn" type="button">退出登录</button>
         </div>
-        <section id="status" class="status" hidden></section>
-        <section id="transferToast" class="transfer-toast" hidden></section>
+        <section id="status" class="status" role="status" aria-live="polite" hidden></section>
+        <section id="transferToast" class="transfer-toast" role="status" aria-live="polite" hidden></section>
 
         <section data-page="recommend" class="page">
           <div class="hero card">
             <h1>推荐</h1>
             <p>可在 TMDB / 豆瓣间切换分类，展示当前分类全部内容。</p>
             <div class="recommend-top">
-              <input id="recommendQuery" placeholder="推荐页搜索（仅TMDB）" />
+              <input id="recommendQuery" name="recommend_query" autocomplete="off" aria-label="推荐搜索关键词" placeholder="推荐页搜索（仅TMDB）" />
               <button id="recommendSearchBtn" class="btn-primary">搜索</button>
               <div class="image-mode">
                 <span>图片</span>
                 <label><input type="radio" name="imgMode" value="proxy" />代理</label>
                 <label><input type="radio" name="imgMode" value="direct" checked />直连</label>
               </div>
+              <button id="recommendFilterToggleBtn" type="button" class="btn-open">筛选</button>
             </div>
+            <div id="recommendAdvanced" class="recommend-advanced">
             <div class="recommend-panel">
               <div id="recommendSourceTabs" class="source-tabs source-tabs-embedded">
                 <button class="active" data-source="tmdb">TMDB</button>
                 <button data-source="douban">豆瓣</button>
               </div>
               <div class="recommend-controls">
+                <button id="refreshRecommendBtn" type="button">刷新</button>
                 <label>分类
                   <select id="recommendCategory"></select>
                 </label>
-                <button id="refreshRecommendBtn" type="button">刷新</button>
               </div>
+            </div>
             </div>
           </div>
 
@@ -66,40 +70,45 @@
             <h1 id="searchHeading">搜索</h1>
             <p>聚合 PanSou 与 Prowlarr 资源结果，可直接转存到对应网盘。</p>
             <div class="search-bar">
-              <input id="resourceKeyword" placeholder="输入关键词搜索资源" />
+              <input id="resourceKeyword" name="resource_keyword" autocomplete="off" aria-label="资源搜索关键词" placeholder="输入关键词搜索资源" />
               <button id="resourceSearchBtn" class="btn-primary">搜索</button>
+              <button id="searchFilterToggleBtn" type="button" class="btn-open">筛选</button>
             </div>
-            <div id="sourceTabs" class="tabs">
-              <button data-source="all" class="active">全部</button>
-              <button data-source="prowlarr">Prowlarr</button>
-              <button data-source="pansou">PanSou</button>
-            </div>
-            <div class="search-tools">
-              <label>网盘类型
-                <select id="cloudTypeFilter">
-                  <option value="all">全部</option>
-                  <option value="magnet">磁力</option>
-                  <option value="quark">夸克</option>
-                  <option value="tianyi">天翼</option>
-                  <option value="123">123</option>
-                  <option value="115">115</option>
-                  <option value="other">其他</option>
-                </select>
-              </label>
-              <label>排序
-                <select id="sortBy">
-                  <option value="score_desc">相关度</option>
-                  <option value="size_desc">体积从大到小</option>
-                  <option value="size_asc">体积从小到大</option>
-                  <option value="time_desc">时间最新</option>
-                  <option value="time_asc">时间最旧</option>
-                </select>
-              </label>
-              <div id="resultViewTabs" class="tabs">
-                <button class="active" data-view="list">列表</button>
-                <button data-view="poster">海报卡片</button>
+            <div id="searchAdvanced" class="search-advanced">
+              <div class="search-row search-row-source">
+                <div id="sourceTabs" class="tabs">
+                  <button data-source="all" class="active">全部</button>
+                  <button data-source="prowlarr">Prowlarr</button>
+                  <button data-source="pansou">PanSou</button>
+                </div>
+                <label>网盘类型
+                  <select id="cloudTypeFilter">
+                    <option value="all">全部</option>
+                    <option value="magnet">磁力</option>
+                    <option value="quark">夸克</option>
+                    <option value="tianyi">天翼</option>
+                    <option value="123">123</option>
+                    <option value="115">115</option>
+                    <option value="other">其他</option>
+                  </select>
+                </label>
               </div>
-              <button id="toggleResultSelectBtn" type="button">选择结果</button>
+              <div class="search-row search-row-view">
+                <div id="resultViewTabs" class="tabs">
+                  <button class="active" data-view="list">列表</button>
+                  <button data-view="poster">海报卡片</button>
+                </div>
+                <label>排序
+                  <select id="sortBy">
+                    <option value="score_desc">相关度</option>
+                    <option value="size_desc">体积从大到小</option>
+                    <option value="size_asc">体积从小到大</option>
+                    <option value="time_desc">时间最新</option>
+                    <option value="time_asc">时间最旧</option>
+                  </select>
+                </label>
+                <button id="toggleResultSelectBtn" type="button">选择结果</button>
+              </div>
             </div>
           </div>
 
@@ -142,7 +151,7 @@
                     <span>API Key</span>
                     <div class="password-wrap">
                       <input id="tmdbApiKey" type="password" />
-                      <button type="button" class="btn-secret-toggle" data-secret-target="tmdbApiKey">显示</button>
+                      <button type="button" class="btn-secret-toggle" data-secret-target="tmdbApiKey" aria-label="显示内容" title="显示内容" aria-pressed="false"><span class="sr-only">显示内容</span></button>
                     </div>
                     <small id="tmdbApiKeyHint" class="hint"></small>
                   </label>
@@ -160,7 +169,7 @@
                 </div>
                 <div class="form-grid">
                   <label><span>115 Base URL</span><input id="c115BaseUrl" /></label>
-                  <label class="password-field"><span>115 Cookie</span><div class="password-wrap"><input id="c115Cookie" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="c115Cookie">显示</button></div></label>
+                  <label class="password-field"><span>115 Cookie</span><div class="password-wrap"><input id="c115Cookie" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="c115Cookie" aria-label="显示内容" title="显示内容" aria-pressed="false"><span class="sr-only">显示内容</span></button></div></label>
                 </div>
                 <small id="testResult-c115" class="test-result"></small>
               </article>
@@ -171,7 +180,7 @@
                   <button type="button" class="btn-test-provider" data-provider="quark">测试</button>
                 </div>
                 <div class="form-grid">
-                  <label class="password-field"><span>夸克 Cookie</span><div class="password-wrap"><input id="quarkCookie" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="quarkCookie">显示</button></div></label>
+                  <label class="password-field"><span>夸克 Cookie</span><div class="password-wrap"><input id="quarkCookie" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="quarkCookie" aria-label="显示内容" title="显示内容" aria-pressed="false"><span class="sr-only">显示内容</span></button></div></label>
                 </div>
                 <small id="testResult-quark" class="test-result"></small>
               </article>
@@ -183,7 +192,7 @@
                 </div>
                 <div class="form-grid">
                   <label><span>天翼账号</span><input id="tianyiUsername" placeholder="手机号/邮箱" /></label>
-                  <label class="password-field"><span>天翼密码</span><div class="password-wrap"><input id="tianyiPassword" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="tianyiPassword">显示</button></div></label>
+                  <label class="password-field"><span>天翼密码</span><div class="password-wrap"><input id="tianyiPassword" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="tianyiPassword" aria-label="显示内容" title="显示内容" aria-pressed="false"><span class="sr-only">显示内容</span></button></div></label>
                 </div>
                 <small id="testResult-tianyi" class="test-result"></small>
               </article>
@@ -195,7 +204,7 @@
                 </div>
                 <div class="form-grid">
                   <label><span>123 账号</span><input id="pan123Username" placeholder="手机号/邮箱" /></label>
-                  <label class="password-field"><span>123 密码</span><div class="password-wrap"><input id="pan123Password" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="pan123Password">显示</button></div></label>
+                  <label class="password-field"><span>123 密码</span><div class="password-wrap"><input id="pan123Password" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="pan123Password" aria-label="显示内容" title="显示内容" aria-pressed="false"><span class="sr-only">显示内容</span></button></div></label>
                 </div>
                 <small id="testResult-pan123" class="test-result"></small>
               </article>
@@ -211,7 +220,7 @@
                   <label><span>API 地址</span><input id="pansouBaseUrl" /></label>
                   <label class="inline-toggles"><span>开关</span><div class="toggle-pack"><span>启用</span><input id="enablePansou" type="checkbox" class="toggle" /><span>代理</span><input id="pansouUseProxy" type="checkbox" class="toggle" /><span>认证</span><input id="pansouEnableAuth" type="checkbox" class="toggle" /></div></label>
                   <label><span>认证用户名</span><input id="pansouUsername" /></label>
-                  <label class="password-field"><span>认证密码</span><div class="password-wrap"><input id="pansouPassword" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="pansouPassword">显示</button></div></label>
+                  <label class="password-field"><span>认证密码</span><div class="password-wrap"><input id="pansouPassword" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="pansouPassword" aria-label="显示内容" title="显示内容" aria-pressed="false"><span class="sr-only">显示内容</span></button></div></label>
                   <label><span>搜索路径</span><input id="pansouSearchPath" placeholder="/api/search" /></label>
                   <label><span>请求方式</span><select id="pansouSearchMethod"><option value="POST">POST</option><option value="GET">GET</option></select></label>
                   <label><span>数据来源</span><select id="pansouSource"><option value="all">全部</option><option value="tg">仅Telegram</option><option value="plugin">仅插件</option></select></label>
@@ -237,7 +246,7 @@
                 <div class="form-grid compact-grid">
                   <label><span>Prowlarr URL</span><input id="prowlarrBaseUrl" /></label>
                   <label class="inline-toggles"><span>开关</span><div class="toggle-pack"><span>启用</span><input id="enableProwlarr" type="checkbox" class="toggle" /><span>代理</span><input id="prowlarrUseProxy" type="checkbox" class="toggle" /></div></label>
-                  <label class="password-field"><span>Prowlarr API Key</span><div class="password-wrap"><input id="prowlarrApiKey" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="prowlarrApiKey">显示</button></div><small id="prowlarrApiKeyHint" class="hint"></small></label>
+                  <label class="password-field"><span>Prowlarr API Key</span><div class="password-wrap"><input id="prowlarrApiKey" type="password" /><button type="button" class="btn-secret-toggle" data-secret-target="prowlarrApiKey" aria-label="显示内容" title="显示内容" aria-pressed="false"><span class="sr-only">显示内容</span></button></div><small id="prowlarrApiKeyHint" class="hint"></small></label>
                 </div>
                 <small id="testResult-prowlarr" class="test-result"></small>
               </article>
@@ -273,7 +282,7 @@
                       <button type="button" id="cleanupPickLocalDirBtn">选择目录</button>
                       <div id="cleanupLocalPath" class="dir-picked-line">未选择</div>
                     </div>
-                    <div class="bulk-controls transfer-browser-toolbar">
+                    <div class="bulk-controls transfer-browser-toolbar cleanup-local-actions">
                       <button type="button" id="cleanupLocalPreviewBtn" class="btn-primary">预览本地清理</button>
                       <button type="button" id="cleanupLocalExecuteBtn" class="btn-primary" disabled>执行清理</button>
                       <button type="button" id="cleanupLocalStopBtn" class="btn-stop" hidden>停止</button>
@@ -311,7 +320,7 @@
       </main>
     </div>
 
-    <div id="dirPickerModal" class="modal" hidden>
+    <div id="dirPickerModal" class="modal" role="dialog" aria-modal="true" aria-label="选择云盘目录" hidden>
       <div class="modal-card dir-modal-card">
         <h3>选择云盘目录</h3>
         <div id="dirPickerPath" class="dir-picked-line">/</div>
@@ -324,7 +333,7 @@
       </div>
     </div>
 
-    <div id="transferItemsModal" class="modal" hidden>
+    <div id="transferItemsModal" class="modal" role="dialog" aria-modal="true" aria-label="选择转存资源" hidden>
       <div class="modal-card dir-modal-card transfer-browser-card">
         <div class="transfer-browser-head">
           <div>
@@ -347,7 +356,7 @@
       </div>
     </div>
 
-    <div id="logsModal" class="modal" hidden>
+    <div id="logsModal" class="modal" role="dialog" aria-modal="true" aria-label="应用日志" hidden>
       <div class="modal-card logs-card">
         <h3>应用日志</h3>
         <div class="bulk-controls">
@@ -364,7 +373,7 @@
         <h2>登录 CloudMediaPilot</h2>
         <p class="hint">默认：admin / admin</p>
         <label><span>用户名</span><input id="loginUsername" autocomplete="username" /></label>
-        <label><span>密码</span><div class="password-wrap"><input id="loginPassword" type="password" autocomplete="current-password" /><button type="button" class="btn-secret-toggle" data-secret-target="loginPassword">显示</button></div></label>
+        <label><span>密码</span><div class="password-wrap"><input id="loginPassword" type="password" autocomplete="current-password" /><button type="button" class="btn-secret-toggle" data-secret-target="loginPassword" aria-label="显示内容" title="显示内容" aria-pressed="false"><span class="sr-only">显示内容</span></button></div></label>
         <label class="login-remember"><input id="loginRemember" type="checkbox" /><span>记住密码</span><small>仅保存在当前浏览器</small></label>
         <small id="loginError" class="login-error" hidden></small>
         <button type="submit" class="btn-primary">登录</button>

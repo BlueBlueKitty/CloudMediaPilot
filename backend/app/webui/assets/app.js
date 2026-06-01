@@ -149,6 +149,7 @@ const IMG_FALLBACK =
 const statusBox = document.getElementById("status");
 const nav = document.getElementById("nav");
 const LOGIN_REMEMBER_KEY = "cmp_login_remember_v1";
+const modalFocusStack = new Map();
 
 function setStatus(message, level = "ok") {
   statusBox.hidden = false;
@@ -380,7 +381,7 @@ function showPage(pageId) {
   if (pageId === "recommend") {
     loadRecommend(true).catch((error) => setStatus("加载推荐失败：" + error.message, "warn"));
   }
-  history.replaceState(null, "", "#" + pageId);
+  writeUiStateToUrl({ page: pageId });
 }
 
 function renderRecommendGrid(items) {
@@ -393,6 +394,8 @@ function renderRecommendGrid(items) {
   items.forEach((item) => {
     const card = document.createElement("article");
     card.className = "trend-card";
+    card.tabIndex = 0;
+    card.setAttribute("aria-expanded", "false");
     card.dataset.title = item.title || "";
     const tags = [];
     const isValidText = (v) => !!v && !String(v).includes("未知");
@@ -404,10 +407,10 @@ function renderRecommendGrid(items) {
     const cachedDetail = state.detailCache.get(item.title || "");
     card.innerHTML = `
       <div class="poster-wrap">
-        <img alt="${escapeHtml(item.title)}" src="${escapeHtml(posterSrc(item.poster_url))}" />
+        <img alt="${escapeHtml(item.title)}" width="400" height="600" loading="lazy" src="${escapeHtml(posterSrc(item.poster_url))}" />
         <div class="poster-blur" style="background-image:url('${escapeHtml(posterSrc(item.poster_url))}')"></div>
         <div class="poster-overlay">
-          <button type="button" class="poster-search-btn" title="搜索资源">🔍</button>
+          <button type="button" class="poster-search-btn" title="搜索资源" aria-label="搜索 ${escapeHtml(item.title || "该资源")}">搜索资源</button>
           <div class="poster-detail">${escapeHtml(cachedDetail || "详情预加载中...")}</div>
         </div>
         <span class="badge-score">★ ${item.rating || "-"}</span>
@@ -427,6 +430,42 @@ function renderRecommendGrid(items) {
       setStatus("正在搜索资源...");
       await doResourceSearch(item.title || "", document.getElementById("resourceSearchBtn"));
     };
+    const detailBox = card.querySelector(".poster-detail");
+    if (detailBox) {
+      detailBox.addEventListener("click", (event) => {
+        if (!window.matchMedia("(hover: none)").matches) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const expanded = card.classList.contains("expanded");
+        if (expanded) {
+          card.classList.remove("expanded");
+          card.setAttribute("aria-expanded", "false");
+        }
+      });
+    }
+    card.addEventListener("click", (event) => {
+      if (event.target && event.target.closest(".poster-search-btn")) return;
+      const expanded = card.classList.toggle("expanded");
+      card.setAttribute("aria-expanded", expanded ? "true" : "false");
+      if (expanded) loadRecommendDetail(item, card);
+    });
+    card.addEventListener("focus", () => {
+      if (window.matchMedia("(hover: none)").matches) return;
+      card.classList.add("expanded");
+      card.setAttribute("aria-expanded", "true");
+      loadRecommendDetail(item, card);
+    });
+    card.addEventListener("blur", () => {
+      if (window.matchMedia("(hover: none)").matches) return;
+      card.classList.remove("expanded");
+      card.setAttribute("aria-expanded", "false");
+    });
+    card.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        card.click();
+      }
+    });
     card.onmouseenter = () => loadRecommendDetail(item, card);
     root.appendChild(card);
   });
@@ -618,6 +657,7 @@ function applyFilters() {
   state.currentPage = 1;
   renderSummary();
   renderResourceList();
+  writeUiStateToUrl();
 }
 
 function resultId(row) {
@@ -854,7 +894,114 @@ function renderPagination() {
       if (!Number.isFinite(page)) return;
       state.currentPage = Math.min(Math.max(1, page), totalPages);
       renderResourceList();
+      writeUiStateToUrl();
     };
+  });
+}
+
+function writeUiStateToUrl(extra = {}) {
+  const url = new URL(window.location.href);
+  const currentPageName = extra.page || document.querySelector("section[data-page]:not([hidden])")?.dataset.page || "recommend";
+  url.hash = `#${currentPageName}`;
+  const params = url.searchParams;
+  params.set("page", currentPageName);
+  params.set("source", state.sourceFilter || "all");
+  params.set("cloud", state.cloudTypeFilter || "all");
+  params.set("sort", state.sortBy || "score_desc");
+  params.set("view", state.resultView || "list");
+  params.set("p", String(state.currentPage || 1));
+  history.replaceState(null, "", `${url.pathname}?${params.toString()}${url.hash}`);
+}
+
+function applyUiStateFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const page = params.get("page");
+  const source = params.get("source");
+  const cloud = params.get("cloud");
+  const sort = params.get("sort");
+  const view = params.get("view");
+  const p = Number(params.get("p"));
+  if (source) state.sourceFilter = source;
+  if (cloud) state.cloudTypeFilter = cloud;
+  if (sort) state.sortBy = sort;
+  if (view) state.resultView = view;
+  if (Number.isFinite(p) && p > 0) state.currentPage = Math.floor(p);
+  return page || location.hash.replace("#", "") || "recommend";
+}
+
+function setModalVisibility(modalId, visible) {
+  const modal = document.getElementById(modalId);
+  if (!modal) return;
+  if (visible) {
+    modalFocusStack.set(modalId, document.activeElement);
+    modal.hidden = false;
+    const firstFocusable = modal.querySelector("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])");
+    if (firstFocusable) firstFocusable.focus();
+    return;
+  }
+  modal.hidden = true;
+  const prev = modalFocusStack.get(modalId);
+  if (prev && typeof prev.focus === "function") prev.focus();
+  modalFocusStack.delete(modalId);
+}
+
+function bindModalEscapeClose() {
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const modals = ["logsModal", "transferItemsModal", "dirPickerModal"];
+    const opened = modals.find((id) => !document.getElementById(id)?.hidden);
+    if (!opened) return;
+    event.preventDefault();
+    if (opened === "logsModal") setModalVisibility("logsModal", false);
+    if (opened === "transferItemsModal") closeTransferItemsModal();
+    if (opened === "dirPickerModal") closeDirPicker();
+  });
+}
+
+function bindHeaderCondenseBehavior() {
+  const main = document.querySelector(".main");
+  if (!main) return;
+  const refresh = () => {
+    main.classList.toggle("is-condensed", main.scrollTop > 36);
+  };
+  main.addEventListener("scroll", refresh, { passive: true });
+  refresh();
+}
+
+function syncSearchFilterToggleButtonText() {
+  const searchBtn = document.getElementById("searchFilterToggleBtn");
+  const searchHead = document.querySelector(".search-head");
+  const recommendBtn = document.getElementById("recommendFilterToggleBtn");
+  const recommendHead = document.querySelector(".hero");
+  const isMobile = window.matchMedia("(max-width: 980px)").matches;
+  if (searchBtn && searchHead) {
+    const opened = searchHead.classList.contains("search-advanced-open");
+    searchBtn.textContent = isMobile && opened ? "收起筛选" : "筛选";
+  }
+  if (recommendBtn && recommendHead) {
+    const opened = recommendHead.classList.contains("recommend-advanced-open");
+    recommendBtn.textContent = isMobile && opened ? "收起筛选" : "筛选";
+  }
+}
+
+function applyFormAccessibilityDefaults() {
+  const typeAutocompleteMap = {
+    password: "current-password",
+    email: "email",
+    tel: "tel",
+    url: "url",
+    search: "off",
+  };
+  document.querySelectorAll("input, select, textarea").forEach((el) => {
+    if (!el.name && el.id) el.name = el.id;
+    if (el.tagName === "INPUT" && !el.autocomplete) {
+      const byType = typeAutocompleteMap[el.type];
+      el.autocomplete = byType || "off";
+    }
+    if (!el.getAttribute("aria-label")) {
+      const label = el.closest("label")?.querySelector("span")?.textContent?.trim();
+      if (label) el.setAttribute("aria-label", label);
+    }
   });
 }
 
@@ -951,16 +1098,15 @@ function renderFilterRules() {
     const row = document.createElement("div");
     row.className = "filter-rule-row";
     row.innerHTML = `
-      <div class="filter-rule-head">
-        <strong>${escapeHtml(rule.name || `规则 ${index + 1}`)}</strong>
-        <label class="filter-rule-toggle"><input type="checkbox" data-key="enabled" ${rule.enabled ? "checked" : ""} /> 启用</label>
-      </div>
       <div class="filter-rule-grid">
         <label><span>规则名</span><input data-key="name" value="${escapeHtml(rule.name || "")}" /></label>
         <label><span>Glob</span><input data-key="glob" value="${escapeHtml(rule.glob || "")}" placeholder="*.txt" /></label>
         <label><span>最小体积 (MB)</span><input data-key="min_size_mb" type="number" min="0" step="1" value="${rule.min_size_mb ?? ""}" placeholder="MB" /></label>
         <label><span>最大体积 (MB)</span><input data-key="max_size_mb" type="number" min="0" step="1" value="${rule.max_size_mb ?? ""}" placeholder="MB" /></label>
-        <button type="button" data-action="remove">删除</button>
+        <div class="filter-rule-actions">
+          <button type="button" data-action="remove">删除</button>
+          <label class="filter-rule-toggle"><input type="checkbox" data-key="enabled" ${rule.enabled ? "checked" : ""} /> 启用</label>
+        </div>
       </div>
     `;
     row.querySelectorAll("[data-key]").forEach((input) => {
@@ -1515,12 +1661,11 @@ function normalizeDirPickerStack(data, current) {
 }
 
 async function openDirPicker(initialId, initialPath, provider, sourceUri, onConfirm) {
-  const modal = document.getElementById("dirPickerModal");
   state.dirPicker.stack = [{ id: initialId || "0", path: initialPath || "/" }];
   state.dirPicker.provider = provider || "115";
   state.dirPicker.sourceUri = sourceUri || "";
   state.dirPicker.onConfirm = onConfirm;
-  modal.hidden = false;
+  setModalVisibility("dirPickerModal", true);
   syncDirPickerBackButton();
   await renderDirPicker();
 }
@@ -1567,7 +1712,7 @@ async function renderDirPicker() {
 }
 
 function closeDirPicker() {
-  document.getElementById("dirPickerModal").hidden = true;
+  setModalVisibility("dirPickerModal", false);
   state.dirPicker.onConfirm = null;
   state.dirPicker.sourceUri = "";
 }
@@ -1591,8 +1736,7 @@ function setLastDir(provider, choice) {
 }
 
 function openTransferItemsModal() {
-  const modal = document.getElementById("transferItemsModal");
-  modal.hidden = false;
+  setModalVisibility("transferItemsModal", true);
   renderTransferItemsModal();
 }
 
@@ -1734,7 +1878,7 @@ function renderTransferItemsModal() {
 }
 
 function closeTransferItemsModal() {
-  document.getElementById("transferItemsModal").hidden = true;
+  setModalVisibility("transferItemsModal", false);
 }
 
 async function doTransferCommit(sourceUri, targetDirId, selectedIds, cloudType) {
@@ -2111,6 +2255,22 @@ function bindEvents() {
       document.getElementById("resourceSearchBtn").click();
     }
   });
+  const searchFilterToggleBtn = document.getElementById("searchFilterToggleBtn");
+  if (searchFilterToggleBtn) {
+    searchFilterToggleBtn.onclick = () => {
+      const head = document.querySelector(".search-head");
+      const opened = head.classList.toggle("search-advanced-open");
+      searchFilterToggleBtn.textContent = opened ? "收起筛选" : "筛选";
+    };
+  }
+  const recommendFilterToggleBtn = document.getElementById("recommendFilterToggleBtn");
+  if (recommendFilterToggleBtn) {
+    recommendFilterToggleBtn.onclick = () => {
+      const head = document.querySelector(".hero");
+      const opened = head.classList.toggle("recommend-advanced-open");
+      recommendFilterToggleBtn.textContent = opened ? "收起筛选" : "筛选";
+    };
+  }
 
   document.getElementById("sourceTabs").querySelectorAll("button").forEach((btn) => {
     btn.onclick = () => {
@@ -2127,6 +2287,7 @@ function bindEvents() {
       btn.classList.add("active");
       state.resultView = btn.dataset.view;
       renderResourceList();
+      writeUiStateToUrl();
     };
   });
 
@@ -2157,18 +2318,23 @@ function bindEvents() {
       if (!input) return;
       const show = input.type === "password";
       input.type = show ? "text" : "password";
-      btn.textContent = show ? "隐藏" : "显示";
+      const nextLabel = show ? "隐藏内容" : "显示内容";
+      btn.setAttribute("aria-label", nextLabel);
+      btn.setAttribute("title", nextLabel);
+      btn.setAttribute("aria-pressed", show ? "true" : "false");
+      const text = btn.querySelector(".sr-only");
+      if (text) text.textContent = nextLabel;
     };
   });
   document.getElementById("logoutBtn").onclick = doLogout;
   document.getElementById("showLogsBtn").onclick = async () => {
-    document.getElementById("logsModal").hidden = false;
+    setModalVisibility("logsModal", true);
     await loadLogs();
   };
   document.getElementById("refreshLogsBtn").onclick = loadLogs;
   document.getElementById("logLevelFilter").onchange = loadLogs;
   document.getElementById("closeLogsBtn").onclick = () => {
-    document.getElementById("logsModal").hidden = true;
+    setModalVisibility("logsModal", false);
   };
 
   document.querySelectorAll(".btn-test-provider").forEach((btn) => {
@@ -2324,7 +2490,7 @@ function bindEvents() {
 }
 
 async function bootstrapAfterLogin() {
-  const initialPage = location.hash.replace("#", "") || "recommend";
+  const initialPage = location.hash.replace("#", "") || "search";
   await loadSettings();
   await loadRecommendCategories();
   await loadAppInfo();
@@ -2333,8 +2499,27 @@ async function bootstrapAfterLogin() {
 }
 
 async function init() {
+  applyFormAccessibilityDefaults();
+  bindModalEscapeClose();
   bindEvents();
-  const initialPage = location.hash.replace("#", "") || "recommend";
+  bindHeaderCondenseBehavior();
+  syncSearchFilterToggleButtonText();
+  window.addEventListener("resize", syncSearchFilterToggleButtonText);
+  const initialPage = applyUiStateFromUrl();
+  const sourceBtn = document.querySelector(`#sourceTabs button[data-source="${state.sourceFilter}"]`);
+  if (sourceBtn) {
+    document.getElementById("sourceTabs").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+    sourceBtn.classList.add("active");
+  }
+  const viewBtn = document.querySelector(`#resultViewTabs button[data-view="${state.resultView}"]`);
+  if (viewBtn) {
+    document.getElementById("resultViewTabs").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+    viewBtn.classList.add("active");
+  }
+  const cloudTypeFilter = document.getElementById("cloudTypeFilter");
+  if (cloudTypeFilter) cloudTypeFilter.value = state.cloudTypeFilter;
+  const sortBy = document.getElementById("sortBy");
+  if (sortBy) sortBy.value = state.sortBy;
   setVisiblePage(initialPage);
   const ok = await ensureAuth();
   if (!ok) return;
