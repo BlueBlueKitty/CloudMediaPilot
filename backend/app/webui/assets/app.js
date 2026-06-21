@@ -2670,12 +2670,11 @@ function bindEvents() {
 }
 
 async function bootstrapAfterLogin() {
-  const initialPage = location.hash.replace("#", "") || "search";
   await loadSettings();
   await loadRecommendCategories();
   await loadReleaseNotes();
   switchSettingsTab("media");
-  showPage(initialPage);
+  showPage("search");
 }
 
 async function init() {
@@ -2686,7 +2685,8 @@ async function init() {
   bindHeaderCondenseBehavior();
   syncSearchFilterToggleButtonText();
   window.addEventListener("resize", syncSearchFilterToggleButtonText);
-  const initialPage = applyUiStateFromUrl();
+  applyUiStateFromUrl();
+  const initialPage = "search";
   const sourceBtn = document.querySelector(`#sourceTabs button[data-source="${state.sourceFilter}"]`);
   if (sourceBtn) {
     document.getElementById("sourceTabs").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
@@ -2702,6 +2702,7 @@ async function init() {
   const sortBy = document.getElementById("sortBy");
   if (sortBy) sortBy.value = state.sortBy;
   setVisiblePage(initialPage);
+  writeUiStateToUrl({ page: initialPage });
   const ok = await ensureAuth();
   if (!ok) return;
   await bootstrapAfterLogin();

@@ -261,8 +261,11 @@ def _require_auth(request: Request, store: AppConfigStore = Depends(get_app_conf
 
 
 @router.get("/", response_class=HTMLResponse)
-async def index() -> str:
-    return _WEBUI_INDEX.read_text(encoding="utf-8")
+async def index() -> HTMLResponse:
+    return HTMLResponse(
+        _WEBUI_INDEX.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/health", response_model=HealthResponse)

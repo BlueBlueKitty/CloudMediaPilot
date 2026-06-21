@@ -8,6 +8,16 @@ from fastapi.testclient import TestClient
 client = TestClient(app)
 
 
+def test_webui_opens_on_search_page_without_cached_shell() -> None:
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert '<section data-page="recommend" class="page" hidden>' in response.text
+    assert '<section data-page="search" class="page">' in response.text
+    assert '/assets/app.js?v=20260621-04' in response.text
+
+
 def _reset_runtime_config_db() -> None:
     get_settings.cache_clear()
     get_app_config_store.cache_clear()

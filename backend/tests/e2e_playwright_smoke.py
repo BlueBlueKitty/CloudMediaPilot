@@ -18,11 +18,13 @@ def run(base_url: str = "http://127.0.0.1:1315") -> None:
             lambda m: errors.append(f"console:{m.type}:{m.text}") if m.type == "error" else None,
         )
 
-        page.goto(base_url + "/", wait_until="networkidle")
+        page.goto(base_url + "/?page=recommend#recommend", wait_until="networkidle")
         page.fill("#loginUsername", "admin")
         page.fill("#loginPassword", "admin")
         page.click('#loginForm button[type="submit"]')
-        page.wait_for_selector('#nav button[data-page="search"]', timeout=6000)
+        page.wait_for_selector('section[data-page="search"]:visible', timeout=6000)
+        assert page.locator('section[data-page="recommend"]').is_hidden()
+        assert "page=search" in page.url and page.url.endswith("#search"), page.url
 
         visible_nav = page.eval_on_selector_all(
             "#nav button",
@@ -30,6 +32,9 @@ def run(base_url: str = "http://127.0.0.1:1315") -> None:
         )
         assert len(visible_nav) == 3, f"expected 3 sidebar items, got {visible_nav}"
 
+        page.screenshot(path=str(out_dir / "cmp_search_default_e2e.png"), full_page=True)
+
+        page.click('#nav button[data-page="recommend"]')
         page.wait_for_timeout(1500)
         recommend_cards = page.locator("#recommendGrid .trend-card").count()
         if recommend_cards == 0:
