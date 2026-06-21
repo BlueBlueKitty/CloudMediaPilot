@@ -932,7 +932,7 @@ function renderPagination() {
 
 function writeUiStateToUrl(extra = {}) {
   const url = new URL(window.location.href);
-  const currentPageName = extra.page || document.querySelector("section[data-page]:not([hidden])")?.dataset.page || "recommend";
+  const currentPageName = extra.page || document.querySelector("section[data-page]:not([hidden])")?.dataset.page || "search";
   url.hash = `#${currentPageName}`;
   const params = url.searchParams;
   params.set("page", currentPageName);
@@ -957,7 +957,7 @@ function applyUiStateFromUrl() {
   if (sort) state.sortBy = sort;
   if (view) state.resultView = view;
   if (Number.isFinite(p) && p > 0) state.currentPage = Math.floor(p);
-  return page || location.hash.replace("#", "") || "recommend";
+  return page || location.hash.replace("#", "") || "search";
 }
 
 function setModalVisibility(modalId, visible) {
