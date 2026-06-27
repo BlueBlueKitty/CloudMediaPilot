@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -8,10 +9,17 @@ import time
 from app.adapters.pansou import PanSouAdapter
 from app.adapters.prowlarr import ProwlarrAdapter
 from app.core.errors import ProviderError
-from app.schemas.models import SearchResponse, SearchResultItem, TMDBSearchContext
+from app.schemas.models import (
+    SearchFilterRule,
+    SearchResponse,
+    SearchResultItem,
+    TMDBSearchContext,
+)
 from app.services.search_progress_service import store as search_progress_store
 
 logger = logging.getLogger("resource_search")
+
+DEFAULT_SEARCH_FILTER_RULES: list[dict[str, object]] = []
 
 
 class SearchService:
@@ -59,7 +67,12 @@ class SearchService:
         for task_name, task in (("pansou", pansou_task), ("prowlarr", prowlarr_task)):
             try:
                 out = await task
-                logger.info("search_provider_succeeded provider=%s title=%s count=%s", task_name, keyword, len(out))
+                logger.info(
+                    "search_provider_succeeded provider=%s title=%s count=%s",
+                    task_name,
+                    keyword,
+                    len(out),
+                )
                 search_progress_store.update_provider(
                     request_id, task_name, status="succeeded", count=len(out)
                 )
@@ -70,12 +83,28 @@ class SearchService:
             except ProviderError as exc:
                 partial_success = True
                 warnings.append(f"{task_name}:{exc.message}")
-                logger.error("search_provider_failed provider=%s title=%s error=%s", task_name, keyword, exc.message)
+                logger.error(
+                    "search_provider_failed provider=%s title=%s error=%s",
+                    task_name,
+                    keyword,
+                    exc.message,
+                )
                 search_progress_store.update_provider(
                     request_id, task_name, status="failed", message=exc.message
                 )
 
         merged = self._dedupe(pansou_results + prowlarr_results)
+        total_before_search_filter = len(merged)
+        filtered_count = total_before_search_filter
+        merged = self._filter_search_results(merged)
+        filtered_count -= len(merged)
+        total_after_search_filter = len(merged)
+        if filtered_count > 0:
+            logger.info(
+                "search_filtered_adult title=%s filtered_count=%s",
+                keyword,
+                filtered_count,
+            )
         if tmdb_context:
             merged = self._precision_rank(merged, tmdb_context)
         if limit is not None:
@@ -94,6 +123,9 @@ class SearchService:
             keyword=keyword,
             took_ms=elapsed,
             total=len(merged),
+            total_before_search_filter=total_before_search_filter,
+            search_filter_removed=filtered_count,
+            total_after_search_filter=total_after_search_filter,
             partial_success=partial_success,
             warnings=warnings,
             results=merged,
@@ -117,6 +149,59 @@ class SearchService:
             out.append(row)
         out.sort(key=lambda x: x.score, reverse=True)
         return out
+
+    def _search_filter_rules(self) -> list[SearchFilterRule]:
+        raw = (self.pansou.settings.search_filter_rules or "").strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        out: list[SearchFilterRule] = []
+        for row in parsed:
+            try:
+                out.append(SearchFilterRule.model_validate(row))
+            except Exception:
+                continue
+        return out
+
+    def _matches_search_filter(self, row: SearchResultItem) -> bool:
+        if row.cloud_type != "magnet":
+            return False
+        text = " ".join(
+            part.strip()
+            for part in (row.title or "", row.source_detail or "", row.link or "", row.magnet or "")
+            if part and part.strip()
+        )
+        if not text:
+            return False
+        folded_text = text.casefold()
+        for rule in self._search_filter_rules():
+            if not rule.enabled:
+                continue
+            if rule.match_mode == "keyword":
+                tokens = [
+                    token.strip().casefold()
+                    for token in re.split(r"[,，]", rule.pattern.strip())
+                    if token.strip()
+                ]
+                if tokens and all(token in folded_text for token in tokens):
+                    return True
+                continue
+            try:
+                if re.search(rule.pattern, text, re.IGNORECASE):
+                    return True
+            except re.error:
+                continue
+        return False
+
+    def _filter_search_results(self, items: list[SearchResultItem]) -> list[SearchResultItem]:
+        if not self.pansou.settings.search_filter_enabled:
+            return items
+        return [row for row in items if not self._matches_search_filter(row)]
 
     @staticmethod
     def _normalize_text(text: str) -> str:

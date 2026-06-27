@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from functools import lru_cache
-import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -68,6 +68,8 @@ class ProviderSettings:
     storage_providers: str
     resource_filter_enabled: bool
     resource_filter_rules: str
+    search_filter_enabled: bool
+    search_filter_rules: str
     resource_cleanup_local_roots: str
     quark_cookie: str
     tianyi_username: str

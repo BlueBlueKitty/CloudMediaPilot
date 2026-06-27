@@ -1,6 +1,6 @@
-from importlib import metadata
 import json
 import os
+from importlib import metadata
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
@@ -24,6 +24,7 @@ from app.core.deps import (
     get_search_service,
     get_task_service,
 )
+from app.core.errors import ValidationError
 from app.schemas.models import (
     AuthLoginRequest,
     AuthUserResponse,
@@ -36,33 +37,33 @@ from app.schemas.models import (
     ConnectionTestResponse,
     ConnectionTestResult,
     HealthResponse,
-    OfflineTaskRequest,
     OfflineTaskCheckRequest,
     OfflineTaskCheckResponse,
+    OfflineTaskRequest,
     OfflineTaskResponse,
-    TransferPrepareRequest,
-    TransferPrepareResponse,
-    TransferItemsRequest,
-    TransferCommitRequest,
-    TransferCommitResponse,
     ProviderStatusResponse,
     ReadyResponse,
+    SearchProgressResponse,
     SearchRequest,
     SearchResponse,
-    SearchProgressResponse,
     SettingsResponse,
     SettingsUpdateRequest,
     TaskListResponse,
     TaskStatusResponse,
     TMDBSearchResponse,
+    TransferCommitRequest,
+    TransferCommitResponse,
+    TransferItemsRequest,
+    TransferPrepareRequest,
+    TransferPrepareResponse,
 )
 from app.services.app_config_service import AppConfigStore, build_provider_settings, hash_password
 from app.services.auth_service import issue_session_token, parse_session_token, verify_password
 from app.services.cleanup_service import CleanupService
 from app.services.log_service import handler as memory_log_handler
 from app.services.provider_status_service import ProviderStatusService
-from app.services.search_service import SearchService
 from app.services.search_progress_service import store as search_progress_store
+from app.services.search_service import SearchService
 from app.services.task_service import TaskService
 from app.utils.ids import new_request_id
 from app.utils.media import infer_cloud_type
@@ -721,6 +722,9 @@ async def get_app_settings(
             "pansou_password": cfg.pansou_password,
             "c115_cookie": cfg.c115_cookie,
             "resource_filter_rules": cfg.resource_filter_rules,
+            "search_filter_enabled": cfg.search_filter_enabled,
+            "search_filter_default_rules": store.search_filter_default_rules_json(),
+            "search_filter_rules": cfg.search_filter_rules,
             "resource_cleanup_local_roots": cfg.resource_cleanup_local_roots,
             "quark_cookie": cfg.quark_cookie,
             "tianyi_password": cfg.tianyi_password,
@@ -776,6 +780,8 @@ async def update_app_settings(
         storage_providers=payload.storage_providers,
         resource_filter_enabled=payload.resource_filter_enabled,
         resource_filter_rules=payload.resource_filter_rules,
+        search_filter_enabled=payload.search_filter_enabled,
+        search_filter_rules=payload.search_filter_rules,
         resource_cleanup_local_roots=payload.resource_cleanup_local_roots,
         quark_cookie=payload.quark_cookie,
         tianyi_username=payload.tianyi_username,
@@ -795,6 +801,9 @@ async def update_app_settings(
             "pansou_password": next_cfg.pansou_password,
             "c115_cookie": next_cfg.c115_cookie,
             "resource_filter_rules": next_cfg.resource_filter_rules,
+            "search_filter_enabled": next_cfg.search_filter_enabled,
+            "search_filter_default_rules": store.search_filter_default_rules_json(),
+            "search_filter_rules": next_cfg.search_filter_rules,
             "resource_cleanup_local_roots": next_cfg.resource_cleanup_local_roots,
             "quark_cookie": next_cfg.quark_cookie,
             "tianyi_password": next_cfg.tianyi_password,

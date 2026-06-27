@@ -624,6 +624,8 @@ button { cursor: pointer; white-space: nowrap; }
   background: #21375b;
 }
 .inline-toggles .toggle-pack { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.title-inline-toggle { margin: 0; }
+.title-inline-toggle .toggle-pack { flex-wrap: nowrap; }
 .toggle {
   appearance: none;
   width: 44px;

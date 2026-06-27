@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import sys
 import types
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -54,6 +54,8 @@ def _settings() -> ProviderSettings:
         storage_providers="115,quark,tianyi,123",
         resource_filter_enabled=True,
         resource_filter_rules="",
+        search_filter_enabled=True,
+        search_filter_rules="",
         resource_cleanup_local_roots="",
         quark_cookie="",
         tianyi_username="",

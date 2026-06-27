@@ -70,6 +70,9 @@ class SearchResponse(BaseModel):
     keyword: str
     took_ms: int
     total: int
+    total_before_search_filter: int | None = None
+    search_filter_removed: int = 0
+    total_after_search_filter: int | None = None
     partial_success: bool = False
     warnings: list[str] = Field(default_factory=list)
     results: list[SearchResultItem]
@@ -265,6 +268,9 @@ class SettingsResponse(BaseModel):
     storage_providers: str
     resource_filter_enabled: bool
     resource_filter_rules: str
+    search_filter_enabled: bool
+    search_filter_default_rules: str
+    search_filter_rules: str
     resource_cleanup_local_roots: str
     quark_cookie_masked: str
     quark_cookie: str = ""
@@ -322,6 +328,8 @@ class SettingsUpdateRequest(BaseModel):
     storage_providers: str | None = None
     resource_filter_enabled: bool | None = None
     resource_filter_rules: str | None = None
+    search_filter_enabled: bool | None = None
+    search_filter_rules: str | None = None
     resource_cleanup_local_roots: str | None = None
     quark_cookie: str | None = None
     tianyi_username: str | None = None
@@ -406,6 +414,14 @@ class ResourceFilterRule(BaseModel):
     min_size_mb: int | None = None
     max_size_mb: int | None = None
     applies_to: Literal["transfer", "cleanup", "both"] = "both"
+
+
+class SearchFilterRule(BaseModel):
+    id: str
+    name: str
+    enabled: bool = True
+    match_mode: Literal["keyword", "regex"] = "keyword"
+    pattern: str
 
 
 class CleanupPreviewRequest(BaseModel):

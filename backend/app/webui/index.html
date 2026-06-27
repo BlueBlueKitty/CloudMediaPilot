@@ -138,7 +138,7 @@
           <button data-tab="media" class="active">媒体配置</button>
           <button data-tab="storage">网盘设置</button>
           <button data-tab="search">资源搜索</button>
-          <button data-tab="resource-filter">资源过滤</button>
+          <button data-tab="resource-filter">资源清理</button>
           <button data-tab="system">系统配置</button>
           <button data-tab="release-notes">版本说明</button>
         </div>
@@ -304,18 +304,40 @@
               </div>
               <small id="testResult-prowlarr" class="test-result"></small>
             </article>
+
+            <article class="card form-card provider-card">
+              <div class="card-title-row">
+                <h3>资源过滤规则</h3>
+                <label class="inline-toggles title-inline-toggle">
+                  <div class="toggle-pack"><span>启用过滤</span><input id="searchFilterEnabled" type="checkbox"
+                      class="toggle" /></div>
+                </label>
+              </div>
+              <div class="form-grid compact-grid single-column-grid">
+                <div class="chip-box cleanup-box">
+                  <span>过滤关键词</span>
+                  <div class="chip-toolbar">
+                    <button type="button" id="resetSearchFilterRulesBtn">恢复默认</button>
+                  </div>
+                  <textarea id="searchFilterRuleText" rows="8" placeholder=""></textarea>
+                  <small class="hint">每行一个规则；单个关键词表示命中即过滤，同一行用逗号分隔多个关键词时，需同时命中才过滤。</small>
+                </div>
+              </div>
+            </article>
           </section>
 
           <section data-tab-pane="resource-filter" class="form-pane" hidden>
             <article class="card form-card provider-card">
               <div class="card-title-row">
-                <h3>资源过滤</h3>
-                <label class="title-toggle"><span>启用过滤</span><input id="resourceFilterEnabled" type="checkbox"
-                    class="toggle" /></label>
+                <h3>资源清理规则</h3>
               </div>
               <div class="form-grid compact-grid single-column-grid">
+                <label class="inline-toggles"><span>开关</span>
+                  <div class="toggle-pack"><span>启用过滤</span><input id="resourceFilterEnabled" type="checkbox"
+                      class="toggle" /></div>
+                </label>
                 <div class="chip-box cleanup-box">
-                  <span>过滤规则</span>
+                  <span>清理规则</span>
                   <div class="chip-toolbar">
                     <button type="button" id="addFilterRuleBtn">新增规则</button>
                     <button type="button" id="resetFilterRulesBtn">恢复默认</button>

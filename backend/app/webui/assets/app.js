@@ -18,6 +18,12 @@ const state = {
   cloudTypeFilter: "all",
   sortBy: "score_desc",
   resultView: "list",
+  searchMeta: {
+    totalBeforeSearchFilter: null,
+    searchFilterRemoved: 0,
+    totalAfterSearchFilter: null,
+  },
+  defaultSearchFilterRules: [],
 
   settings: {
     c115_target_dir_id: "0",
@@ -35,6 +41,7 @@ const state = {
   },
 
   pansouCloudTypes: [],
+  searchFilterRules: [],
   resourceFilterRules: [],
   cleanupPreviewTokens: { cloud: "", local: "" },
   cleanupTarget: {
@@ -86,10 +93,10 @@ const PANSOU_CLOUD_TYPE_OPTIONS = [
 ];
 
 const STORAGE_PROVIDER_LABELS = {
-  "115": "115 网盘",
+  115: "115 网盘",
   quark: "夸克网盘",
   tianyi: "天翼云盘",
-  "123": "123 网盘",
+  123: "123 网盘",
   baidu: "百度网盘",
   aliyun: "阿里云盘",
   uc: "UC 网盘",
@@ -137,13 +144,15 @@ const DEFAULT_RESOURCE_FILTER_RULES = [
   },
 ];
 
+const DEFAULT_SEARCH_FILTER_RULES = [];
+
 const IMG_FALLBACK =
   "data:image/svg+xml;utf8," +
   encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600">' +
       '<rect width="100%" height="100%" fill="#1b2f50"/>' +
       '<text x="50%" y="50%" fill="#9fb7da" font-size="22" text-anchor="middle">Poster</text>' +
-    "</svg>"
+      "</svg>",
   );
 
 const statusBox = document.getElementById("status");
@@ -155,7 +164,10 @@ const modalFocusStack = new Map();
 function resolvePreferredTheme() {
   const saved = localStorage.getItem(THEME_STORAGE_KEY);
   if (saved === "dark" || saved === "light") return saved;
-  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return window.matchMedia &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
 }
 
 function applyTheme(theme) {
@@ -166,8 +178,14 @@ function applyTheme(theme) {
   if (toggleBtn) {
     const nextTheme = normalized === "dark" ? "light" : "dark";
     toggleBtn.textContent = normalized === "dark" ? "浅色模式" : "深色模式";
-    toggleBtn.setAttribute("aria-label", `切换到${nextTheme === "dark" ? "深色" : "浅色"}模式`);
-    toggleBtn.setAttribute("title", `切换到${nextTheme === "dark" ? "深色" : "浅色"}模式`);
+    toggleBtn.setAttribute(
+      "aria-label",
+      `切换到${nextTheme === "dark" ? "深色" : "浅色"}模式`,
+    );
+    toggleBtn.setAttribute(
+      "title",
+      `切换到${nextTheme === "dark" ? "深色" : "浅色"}模式`,
+    );
   }
 }
 
@@ -212,7 +230,9 @@ async function api(path, options) {
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.detail || data.message || data.code || "HTTP " + res.status);
+    throw new Error(
+      data.detail || data.message || data.code || "HTTP " + res.status,
+    );
   }
   return res.json();
 }
@@ -241,7 +261,8 @@ function escapeHtml(input) {
 }
 
 function formatBytes(size) {
-  if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) return "-";
+  if (typeof size !== "number" || !Number.isFinite(size) || size <= 0)
+    return "-";
   const units = ["B", "KB", "MB", "GB", "TB"];
   let value = size;
   let unitIndex = 0;
@@ -261,6 +282,13 @@ function defaultResourceFilterRules() {
   return deepClone(DEFAULT_RESOURCE_FILTER_RULES);
 }
 
+function defaultSearchFilterRules() {
+  if (Array.isArray(state.defaultSearchFilterRules) && state.defaultSearchFilterRules.length) {
+    return deepClone(state.defaultSearchFilterRules);
+  }
+  return deepClone(DEFAULT_SEARCH_FILTER_RULES);
+}
+
 function parseResourceFilterRules(raw) {
   if (!raw) return defaultResourceFilterRules();
   try {
@@ -269,7 +297,11 @@ function parseResourceFilterRules(raw) {
     return parsed.map((item, index) => {
       let min = item.min_size_mb;
       if (min === null || min === undefined || min === "") {
-        if (item.min_size_bytes !== null && item.min_size_bytes !== undefined && item.min_size_bytes !== "") {
+        if (
+          item.min_size_bytes !== null &&
+          item.min_size_bytes !== undefined &&
+          item.min_size_bytes !== ""
+        ) {
           min = Math.round(Number(item.min_size_bytes) / (1024 * 1024));
         } else {
           min = null;
@@ -277,7 +309,11 @@ function parseResourceFilterRules(raw) {
       }
       let max = item.max_size_mb;
       if (max === null || max === undefined || max === "") {
-        if (item.max_size_bytes !== null && item.max_size_bytes !== undefined && item.max_size_bytes !== "") {
+        if (
+          item.max_size_bytes !== null &&
+          item.max_size_bytes !== undefined &&
+          item.max_size_bytes !== ""
+        ) {
           max = Math.round(Number(item.max_size_bytes) / (1024 * 1024));
         } else {
           max = null;
@@ -290,12 +326,63 @@ function parseResourceFilterRules(raw) {
         glob: String(item.glob || "*"),
         min_size_mb: min,
         max_size_mb: max,
-        applies_to: ["transfer", "cleanup", "both"].includes(item.applies_to) ? item.applies_to : "both",
+        applies_to: ["transfer", "cleanup", "both"].includes(item.applies_to)
+          ? item.applies_to
+          : "both",
       };
     });
   } catch {
     return defaultResourceFilterRules();
   }
+}
+
+function parseSearchFilterRules(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((item, index) => ({
+      id: String(item.id || `search-rule-${index + 1}`),
+      name: String(item.name || `搜索规则 ${index + 1}`),
+      enabled: item.enabled !== false,
+      match_mode: item.match_mode === "regex" ? "regex" : "keyword",
+      pattern: String(item.pattern || ""),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function searchFilterTextFromRules(rules) {
+  return (rules || [])
+    .filter(
+      (rule) =>
+        rule && rule.enabled !== false && String(rule.pattern || "").trim(),
+    )
+    .map((rule) => String(rule.pattern || "").trim())
+    .join("\n");
+}
+
+function parseSearchFilterText(rawText) {
+  const lines = String(rawText || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const seen = new Set();
+  return lines
+    .filter((line) => {
+      const key = line.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((pattern, index) => ({
+      id: `search-rule-${index + 1}`,
+      name: `搜索规则 ${index + 1}`,
+      enabled: true,
+      match_mode: "keyword",
+      pattern,
+    }));
 }
 
 function loadRememberedLogin() {
@@ -320,7 +407,7 @@ function saveRememberedLogin(username, password) {
       remember: true,
       username: String(username || ""),
       password: String(password || ""),
-    })
+    }),
   );
 }
 
@@ -357,7 +444,9 @@ function getRecommendCacheKey(source, category) {
 }
 
 function getRecommendCache(source, category) {
-  const cached = state.recommendCache.get(getRecommendCacheKey(source, category));
+  const cached = state.recommendCache.get(
+    getRecommendCacheKey(source, category),
+  );
   if (!cached || !Array.isArray(cached.items) || !cached.ts) return null;
   if (Date.now() - cached.ts > 6 * 3600 * 1000) return null;
   return cached.items;
@@ -386,7 +475,7 @@ function cloudTypeName(value) {
     quark: "夸克",
     tianyi: "天翼",
     123: "123",
-    "115": "115",
+    115: "115",
     other: "其他",
     ed2k: "磁力",
     mobile: "移动",
@@ -410,7 +499,9 @@ function setVisiblePage(pageId) {
 function showPage(pageId) {
   setVisiblePage(pageId);
   if (pageId === "recommend") {
-    loadRecommend(true).catch((error) => setStatus("加载推荐失败：" + error.message, "warn"));
+    loadRecommend(true).catch((error) =>
+      setStatus("加载推荐失败：" + error.message, "warn"),
+    );
   }
   writeUiStateToUrl({ page: pageId });
 }
@@ -432,9 +523,11 @@ function renderRecommendGrid(items) {
     const isValidText = (v) => !!v && !String(v).includes("未知");
     if (item.year) tags.push(String(item.year));
     if (isValidText(item.country)) tags.push(String(item.country));
-    if (isValidText(item.language)) tags.push(String(item.language).toUpperCase());
+    if (isValidText(item.language))
+      tags.push(String(item.language).toUpperCase());
     if (item.episodes) tags.push(`${item.episodes}集`);
-    if (state.recommendSource === "douban" && isValidText(item.overview)) tags.push(String(item.overview));
+    if (state.recommendSource === "douban" && isValidText(item.overview))
+      tags.push(String(item.overview));
     const cachedDetail = state.detailCache.get(item.title || "");
     card.innerHTML = `
       <div class="poster-wrap">
@@ -459,7 +552,10 @@ function renderRecommendGrid(items) {
       document.getElementById("resourceKeyword").value = item.title || "";
       showPage("search");
       setStatus("正在搜索资源...");
-      await doResourceSearch(item.title || "", document.getElementById("resourceSearchBtn"));
+      await doResourceSearch(
+        item.title || "",
+        document.getElementById("resourceSearchBtn"),
+      );
     };
     const detailBox = card.querySelector(".poster-detail");
     if (detailBox) {
@@ -514,10 +610,12 @@ async function loadRecommendDetail(item, card) {
     let data = {};
     if (state.recommendSource === "tmdb" && Number(item.tmdb_id) > 0) {
       data = await api(
-        `/recommend/detail/by-id?tmdb_id=${encodeURIComponent(item.tmdb_id)}&media_type=${encodeURIComponent(item.media_type || "")}`
+        `/recommend/detail/by-id?tmdb_id=${encodeURIComponent(item.tmdb_id)}&media_type=${encodeURIComponent(item.media_type || "")}`,
       );
     } else {
-      data = await api(`/recommend/detail?title=${encodeURIComponent(item.title)}`);
+      data = await api(
+        `/recommend/detail?title=${encodeURIComponent(item.title)}`,
+      );
     }
     const parts = [];
     if (data.year) parts.push(String(data.year));
@@ -525,11 +623,17 @@ async function loadRecommendDetail(item, card) {
     if (Array.isArray(data.genres)) parts.push(...data.genres.slice(0, 3));
     if (data.director) parts.push(data.director);
     if (Array.isArray(data.cast)) parts.push(data.cast.slice(0, 4).join(" "));
-    const text = parts.filter(Boolean).join(" / ") || `${item.title}${item.rating ? " / " + item.rating : ""}`;
+    const text =
+      parts.filter(Boolean).join(" / ") ||
+      `${item.title}${item.rating ? " / " + item.rating : ""}`;
     state.detailCache.set(item.title, text);
-    document.querySelectorAll(`.trend-card[data-title="${CSS.escape(item.title)}"] .poster-detail`).forEach((el) => {
-      el.textContent = text;
-    });
+    document
+      .querySelectorAll(
+        `.trend-card[data-title="${CSS.escape(item.title)}"] .poster-detail`,
+      )
+      .forEach((el) => {
+        el.textContent = text;
+      });
   } catch {
     box.textContent = `${item.title}${item.rating ? " / " + item.rating : ""}`;
   }
@@ -537,12 +641,16 @@ async function loadRecommendDetail(item, card) {
 
 function prefetchRecommendDetails(items) {
   if (state.recommendSource !== "tmdb") return;
-  const queue = items.filter((item) => item.title && !state.detailCache.has(item.title)).slice(0, 12);
+  const queue = items
+    .filter((item) => item.title && !state.detailCache.has(item.title))
+    .slice(0, 12);
   let index = 0;
   const workers = Array.from({ length: 3 }, async () => {
     while (index < queue.length) {
       const item = queue[index++];
-      const card = document.querySelector(`.trend-card[data-title="${CSS.escape(item.title)}"]`);
+      const card = document.querySelector(
+        `.trend-card[data-title="${CSS.escape(item.title)}"]`,
+      );
       await loadRecommendDetail(item, card || document.createElement("div"));
     }
   });
@@ -587,7 +695,8 @@ async function loadRecommend(forceRefresh = false) {
   const cached = forceRefresh ? null : getRecommendCache(source, category);
   if (cached) {
     state.recommendItems = cached;
-    document.getElementById("recommendSectionTitle").textContent = currentRecommendCategoryName();
+    document.getElementById("recommendSectionTitle").textContent =
+      currentRecommendCategoryName();
     renderRecommendGrid(cached);
     return;
   }
@@ -595,24 +704,33 @@ async function loadRecommend(forceRefresh = false) {
 
   if (source === "tmdb") {
     if (category === "trend_day") {
-      items = (await api("/tmdb/trending?timeframe=day&limit=120")).results || [];
+      items =
+        (await api("/tmdb/trending?timeframe=day&limit=120")).results || [];
     } else if (category === "trend_week") {
-      items = (await api("/tmdb/trending?timeframe=week&limit=120")).results || [];
+      items =
+        (await api("/tmdb/trending?timeframe=week&limit=120")).results || [];
     } else {
-      items = (await api(`/tmdb/discover?category=${encodeURIComponent(category)}&limit=120`)).results || [];
+      items =
+        (
+          await api(
+            `/tmdb/discover?category=${encodeURIComponent(category)}&limit=120`,
+          )
+        ).results || [];
     }
   } else {
     const [mediaType, tag] = category.split("|");
-    items = (
-      await api(
-        `/douban/hot?media_type=${encodeURIComponent(mediaType || "movie")}&tag=${encodeURIComponent(tag || "热门")}&page_start=0&page_limit=100`
-      )
-    ).results || [];
+    items =
+      (
+        await api(
+          `/douban/hot?media_type=${encodeURIComponent(mediaType || "movie")}&tag=${encodeURIComponent(tag || "热门")}&page_start=0&page_limit=100`,
+        )
+      ).results || [];
   }
 
   state.recommendItems = items;
   setRecommendCache(source, category, items);
-  document.getElementById("recommendSectionTitle").textContent = currentRecommendCategoryName();
+  document.getElementById("recommendSectionTitle").textContent =
+    currentRecommendCategoryName();
   renderRecommendGrid(items);
 }
 
@@ -629,16 +747,20 @@ async function doRecommendSearch(_, buttonEl) {
     if (state.tmdbSearchCache.has(key)) {
       state.recommendSearchMode = true;
       state.recommendItems = state.tmdbSearchCache.get(key);
-      document.getElementById("recommendSectionTitle").textContent = `TMDB搜索：${query}`;
+      document.getElementById("recommendSectionTitle").textContent =
+        `TMDB搜索：${query}`;
       renderRecommendGrid(state.recommendItems);
       setStatus("已命中TMDB搜索缓存");
       return;
     }
-    const data = await api(`/tmdb/search?query=${encodeURIComponent(query)}&limit=120`);
+    const data = await api(
+      `/tmdb/search?query=${encodeURIComponent(query)}&limit=120`,
+    );
     state.recommendSearchMode = true;
     state.recommendItems = data.results || [];
     state.tmdbSearchCache.set(key, state.recommendItems);
-    document.getElementById("recommendSectionTitle").textContent = `TMDB搜索：${query}`;
+    document.getElementById("recommendSectionTitle").textContent =
+      `TMDB搜索：${query}`;
     renderRecommendGrid(state.recommendItems);
   });
 }
@@ -646,11 +768,19 @@ async function doRecommendSearch(_, buttonEl) {
 function renderSummary() {
   const total = state.resources.length;
   const filtered = state.filtered.length;
+  const totalBeforeSearchFilter = state.searchMeta.totalBeforeSearchFilter;
+  const searchFilterRemoved = state.searchMeta.searchFilterRemoved || 0;
+  const totalAfterSearchFilter =
+    state.searchMeta.totalAfterSearchFilter != null
+      ? state.searchMeta.totalAfterSearchFilter
+      : total;
   const sourceMap = {};
   const cloudMap = {};
   state.resources.forEach((row) => {
-    sourceMap[row.source || "unknown"] = (sourceMap[row.source || "unknown"] || 0) + 1;
-    cloudMap[row.cloud_type || "other"] = (cloudMap[row.cloud_type || "other"] || 0) + 1;
+    sourceMap[row.source || "unknown"] =
+      (sourceMap[row.source || "unknown"] || 0) + 1;
+    cloudMap[row.cloud_type || "other"] =
+      (cloudMap[row.cloud_type || "other"] || 0) + 1;
   });
 
   const sourceText = Object.entries(sourceMap)
@@ -662,6 +792,9 @@ function renderSummary() {
     .join(" / ");
 
   document.getElementById("resultSummary").innerHTML = `
+    <div class="summary-item"><div class="k">过滤前</div><div class="v">${totalBeforeSearchFilter != null ? totalBeforeSearchFilter : "-"}</div></div>
+    <div class="summary-item"><div class="k">过滤后</div><div class="v">${totalAfterSearchFilter}</div></div>
+    <div class="summary-item"><div class="k">过滤掉</div><div class="v">${searchFilterRemoved}</div></div>
     <div class="summary-item"><div class="k">总结果</div><div class="v">${total}</div></div>
     <div class="summary-item"><div class="k">当前筛选</div><div class="v">${filtered}</div></div>
     <div class="summary-item"><div class="k">来源分布</div><div class="v">${escapeHtml(sourceText || "-")}</div></div>
@@ -671,16 +804,21 @@ function renderSummary() {
 
 function applyFilters() {
   let rows = state.resources.slice();
-  if (state.sourceFilter !== "all") rows = rows.filter((row) => row.source === state.sourceFilter);
+  if (state.sourceFilter !== "all")
+    rows = rows.filter((row) => row.source === state.sourceFilter);
   if (state.cloudTypeFilter !== "all") {
-    rows = rows.filter((row) => (row.cloud_type || "other") === state.cloudTypeFilter);
+    rows = rows.filter(
+      (row) => (row.cloud_type || "other") === state.cloudTypeFilter,
+    );
   }
 
   rows.sort((a, b) => {
     if (state.sortBy === "size_desc") return (b.size || 0) - (a.size || 0);
     if (state.sortBy === "size_asc") return (a.size || 0) - (b.size || 0);
-    if (state.sortBy === "time_desc") return new Date(b.publish_time || 0) - new Date(a.publish_time || 0);
-    if (state.sortBy === "time_asc") return new Date(a.publish_time || 0) - new Date(b.publish_time || 0);
+    if (state.sortBy === "time_desc")
+      return new Date(b.publish_time || 0) - new Date(a.publish_time || 0);
+    if (state.sortBy === "time_asc")
+      return new Date(a.publish_time || 0) - new Date(b.publish_time || 0);
     return (b.score || 0) - (a.score || 0);
   });
 
@@ -722,7 +860,9 @@ function renderSearchBulkControls() {
   const box = document.getElementById("searchBulkControls");
   if (!box) return;
   const pageRows = visiblePageRows();
-  const selectedOnPage = pageRows.filter((row) => state.selectedResultIds.has(resultId(row))).length;
+  const selectedOnPage = pageRows.filter((row) =>
+    state.selectedResultIds.has(resultId(row)),
+  ).length;
   box.hidden = !state.resultSelectMode;
   box.innerHTML = `
     <button id="selectPageResultsBtn" type="button">全选本页</button>
@@ -732,7 +872,8 @@ function renderSearchBulkControls() {
     <span>已选 ${state.selectedResultIds.size} 个，本页 ${selectedOnPage}/${pageRows.length}</span>
   `;
   document.getElementById("selectPageResultsBtn").onclick = () => {
-    const allSelected = pageRows.length > 0 && selectedOnPage === pageRows.length;
+    const allSelected =
+      pageRows.length > 0 && selectedOnPage === pageRows.length;
     pageRows.forEach((row) => setResultSelected(row, !allSelected));
     renderResourceList();
   };
@@ -741,7 +882,9 @@ function renderSearchBulkControls() {
     renderResourceList();
   };
   document.getElementById("selectAllResultsBtn").onclick = () => {
-    const allSelected = state.filtered.length > 0 && state.filtered.every((row) => state.selectedResultIds.has(resultId(row)));
+    const allSelected =
+      state.filtered.length > 0 &&
+      state.filtered.every((row) => state.selectedResultIds.has(resultId(row)));
     state.filtered.forEach((row) => setResultSelected(row, !allSelected));
     renderResourceList();
   };
@@ -798,7 +941,12 @@ function renderListItem(row) {
       renderSearchBulkControls();
     };
     item.addEventListener("click", (e) => {
-      if (e.target === check || e.target.closest("button") || e.target.closest("a")) return;
+      if (
+        e.target === check ||
+        e.target.closest("button") ||
+        e.target.closest("a")
+      )
+        return;
       check.checked = !check.checked;
       check.dispatchEvent(new Event("change"));
     });
@@ -853,7 +1001,12 @@ function renderPosterCard(row) {
       renderSearchBulkControls();
     };
     card.addEventListener("click", (e) => {
-      if (e.target === check || e.target.closest("button") || e.target.closest("a")) return;
+      if (
+        e.target === check ||
+        e.target.closest("button") ||
+        e.target.closest("a")
+      )
+        return;
       check.checked = !check.checked;
       check.dispatchEvent(new Event("change"));
     });
@@ -874,7 +1027,8 @@ function renderPosterCard(row) {
 function renderResourceList() {
   const list = document.getElementById("resourceList");
   list.textContent = "";
-  list.className = state.resultView === "poster" ? "poster-result-grid" : "resource-list";
+  list.className =
+    state.resultView === "poster" ? "poster-result-grid" : "resource-list";
 
   if (!state.filtered.length) {
     list.className = "resource-list";
@@ -885,7 +1039,11 @@ function renderResourceList() {
   }
 
   visiblePageRows().forEach((row) => {
-    list.appendChild(state.resultView === "poster" ? renderPosterCard(row) : renderListItem(row));
+    list.appendChild(
+      state.resultView === "poster"
+        ? renderPosterCard(row)
+        : renderListItem(row),
+    );
   });
 
   renderPagination();
@@ -895,7 +1053,10 @@ function renderResourceList() {
 function renderPagination() {
   const box = document.getElementById("resultPagination");
   if (!box) return;
-  const totalPages = Math.max(1, Math.ceil(state.filtered.length / state.pageSize));
+  const totalPages = Math.max(
+    1,
+    Math.ceil(state.filtered.length / state.pageSize),
+  );
   state.currentPage = Math.min(Math.max(1, state.currentPage), totalPages);
   if (!state.filtered.length) {
     box.hidden = true;
@@ -908,7 +1069,8 @@ function renderPagination() {
   const end = Math.min(totalPages, state.currentPage + 2);
   if (start > 1) pages.push(makePageButton(1));
   if (start > 2) pages.push("<span>...</span>");
-  for (let page = start; page <= end; page += 1) pages.push(makePageButton(page));
+  for (let page = start; page <= end; page += 1)
+    pages.push(makePageButton(page));
   if (end < totalPages - 1) pages.push("<span>...</span>");
   if (end < totalPages) pages.push(makePageButton(totalPages));
 
@@ -932,7 +1094,10 @@ function renderPagination() {
 
 function writeUiStateToUrl(extra = {}) {
   const url = new URL(window.location.href);
-  const currentPageName = extra.page || document.querySelector("section[data-page]:not([hidden])")?.dataset.page || "search";
+  const currentPageName =
+    extra.page ||
+    document.querySelector("section[data-page]:not([hidden])")?.dataset.page ||
+    "search";
   url.hash = `#${currentPageName}`;
   const params = url.searchParams;
   params.set("page", currentPageName);
@@ -941,7 +1106,11 @@ function writeUiStateToUrl(extra = {}) {
   params.set("sort", state.sortBy || "score_desc");
   params.set("view", state.resultView || "list");
   params.set("p", String(state.currentPage || 1));
-  history.replaceState(null, "", `${url.pathname}?${params.toString()}${url.hash}`);
+  history.replaceState(
+    null,
+    "",
+    `${url.pathname}?${params.toString()}${url.hash}`,
+  );
 }
 
 function applyUiStateFromUrl() {
@@ -966,7 +1135,9 @@ function setModalVisibility(modalId, visible) {
   if (visible) {
     modalFocusStack.set(modalId, document.activeElement);
     modal.hidden = false;
-    const firstFocusable = modal.querySelector("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])");
+    const firstFocusable = modal.querySelector(
+      "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
+    );
     if (firstFocusable) firstFocusable.focus();
     return;
   }
@@ -1030,7 +1201,10 @@ function applyFormAccessibilityDefaults() {
       el.autocomplete = byType || "off";
     }
     if (!el.getAttribute("aria-label")) {
-      const label = el.closest("label")?.querySelector("span")?.textContent?.trim();
+      const label = el
+        .closest("label")
+        ?.querySelector("span")
+        ?.textContent?.trim();
       if (label) el.setAttribute("aria-label", label);
     }
   });
@@ -1055,12 +1229,30 @@ async function doResourceSearch(keyword, buttonEl) {
       await progressTask.catch(() => {});
     }
     state.resources = data.results || [];
+    state.searchMeta = {
+      totalBeforeSearchFilter:
+        typeof data.total_before_search_filter === "number"
+          ? data.total_before_search_filter
+          : state.resources.length,
+      searchFilterRemoved:
+        typeof data.search_filter_removed === "number"
+          ? data.search_filter_removed
+          : 0,
+      totalAfterSearchFilter:
+        typeof data.total_after_search_filter === "number"
+          ? data.total_after_search_filter
+          : state.resources.length,
+    };
     state.selectedResultIds.clear();
     applyFilters();
+    const countSummary = `过滤前 ${state.searchMeta.totalBeforeSearchFilter || 0} 条，过滤后 ${state.searchMeta.totalAfterSearchFilter || 0} 条`;
     if (Array.isArray(data.warnings) && data.warnings.length) {
-      setStatus(`检索完成 ${data.total || 0} 条；告警：${data.warnings.join("；")}`, "warn");
+      setStatus(
+        `检索完成，${countSummary}；告警：${data.warnings.join("；")}`,
+        "warn",
+      );
     } else {
-      setStatus("检索完成，共 " + (data.total || 0) + " 条");
+      setStatus(`检索完成，${countSummary}`);
     }
   });
 }
@@ -1097,7 +1289,9 @@ function renderPansouCloudTypeChips() {
     chip.className = "chip";
     chip.innerHTML = `${escapeHtml(map[value] || value)} <button type="button">×</button>`;
     chip.querySelector("button").onclick = () => {
-      state.pansouCloudTypes = state.pansouCloudTypes.filter((x) => x !== value);
+      state.pansouCloudTypes = state.pansouCloudTypes.filter(
+        (x) => x !== value,
+      );
       syncPansouCloudTypesField();
       renderPansouCloudTypeChips();
     };
@@ -1106,7 +1300,8 @@ function renderPansouCloudTypeChips() {
 }
 
 function syncPansouCloudTypesField() {
-  document.getElementById("pansouCloudTypes").value = state.pansouCloudTypes.join(",");
+  document.getElementById("pansouCloudTypes").value =
+    state.pansouCloudTypes.join(",");
 }
 
 function serializeFilterRules() {
@@ -1117,15 +1312,33 @@ function serializeFilterRules() {
       enabled: !!rule.enabled,
       glob: String(rule.glob || "*"),
       min_size_mb:
-        rule.min_size_mb === null || rule.min_size_mb === undefined || rule.min_size_mb === ""
+        rule.min_size_mb === null ||
+        rule.min_size_mb === undefined ||
+        rule.min_size_mb === ""
           ? null
           : Number(rule.min_size_mb),
       max_size_mb:
-        rule.max_size_mb === null || rule.max_size_mb === undefined || rule.max_size_mb === ""
+        rule.max_size_mb === null ||
+        rule.max_size_mb === undefined ||
+        rule.max_size_mb === ""
           ? null
           : Number(rule.max_size_mb),
-      applies_to: ["transfer", "cleanup", "both"].includes(rule.applies_to) ? rule.applies_to : "both",
-    }))
+      applies_to: ["transfer", "cleanup", "both"].includes(rule.applies_to)
+        ? rule.applies_to
+        : "both",
+    })),
+  );
+}
+
+function serializeSearchFilterRules() {
+  return JSON.stringify(
+    state.searchFilterRules.map((rule, index) => ({
+      id: String(rule.id || `search-rule-${index + 1}`),
+      name: String(rule.name || `搜索规则 ${index + 1}`),
+      enabled: !!rule.enabled,
+      match_mode: rule.match_mode === "regex" ? "regex" : "keyword",
+      pattern: String(rule.pattern || ""),
+    })),
   );
 }
 
@@ -1134,7 +1347,8 @@ function renderFilterRules() {
   if (!root) return;
   root.innerHTML = "";
   if (!state.resourceFilterRules.length) {
-    root.innerHTML = '<div class="cleanup-preview-empty">暂无规则，点击“新增规则”开始配置。</div>';
+    root.innerHTML =
+      '<div class="cleanup-preview-empty">暂无规则，点击“新增规则”开始配置。</div>';
     return;
   }
   state.resourceFilterRules.forEach((rule, index) => {
@@ -1159,7 +1373,12 @@ function renderFilterRules() {
         const next = { ...state.resourceFilterRules[index] };
         if (key === "enabled") next.enabled = !!input.checked;
         else if (key === "min_size_mb" || key === "max_size_mb") {
-          next[key] = input.value === null || input.value === undefined || input.value === "" ? null : Number(input.value);
+          next[key] =
+            input.value === null ||
+            input.value === undefined ||
+            input.value === ""
+              ? null
+              : Number(input.value);
         } else {
           next[key] = input.value;
         }
@@ -1194,7 +1413,9 @@ function renderCleanupLocalRoots() {
     op.textContent = root;
     select.appendChild(op);
   });
-  select.value = roots.includes(state.cleanupTarget.localRoot) ? state.cleanupTarget.localRoot : "";
+  select.value = roots.includes(state.cleanupTarget.localRoot)
+    ? state.cleanupTarget.localRoot
+    : "";
   if (!select.value && roots.length) select.value = roots[0];
   state.cleanupTarget.localRoot = select.value || "";
 }
@@ -1202,7 +1423,8 @@ function renderCleanupLocalRoots() {
 function renderCleanupTarget() {
   renderCleanupLocalRoots();
   const localPath = document.getElementById("cleanupLocalPath");
-  if (localPath) localPath.textContent = state.cleanupTarget.localRoot || "未选择";
+  if (localPath)
+    localPath.textContent = state.cleanupTarget.localRoot || "未选择";
 }
 
 function renderCleanupCloudProviderOptions() {
@@ -1225,7 +1447,8 @@ function renderCleanupCloudProviderOptions() {
     op.disabled = !CLEANUP_IMPLEMENTED_PROVIDERS.has(provider);
     select.appendChild(op);
   });
-  const available = providers.find((x) => CLEANUP_IMPLEMENTED_PROVIDERS.has(x)) || "115";
+  const available =
+    providers.find((x) => CLEANUP_IMPLEMENTED_PROVIDERS.has(x)) || "115";
   const next = providers.includes(state.cleanupTarget.cloudProvider)
     ? state.cleanupTarget.cloudProvider
     : available;
@@ -1255,7 +1478,9 @@ function resetCleanupLogTail() {
 }
 
 function formatCleanupScanLog(row) {
-  const match = String(row.message || "").match(/^cleanup_scan_dir provider=([^\s]+) path=(.+)$/);
+  const match = String(row.message || "").match(
+    /^cleanup_scan_dir provider=([^\s]+) path=(.+)$/,
+  );
   if (!match) return "";
   const provider = match[1];
   const path = match[2];
@@ -1301,7 +1526,12 @@ function buildCleanupRuleStatsFromItems(items) {
     const ruleId = String(item.rule_id || "unknown");
     const ruleName = String(item.rule_name || "未命名规则");
     const key = `${ruleId}::${ruleName}`;
-    const current = statMap.get(key) || { rule_id: ruleId, rule_name: ruleName, count: 0, total_size: 0 };
+    const current = statMap.get(key) || {
+      rule_id: ruleId,
+      rule_name: ruleName,
+      count: 0,
+      total_size: 0,
+    };
     current.count += 1;
     current.total_size += item.size || 0;
     statMap.set(key, current);
@@ -1326,9 +1556,15 @@ function renderCleanupPreview(data) {
       <div class="transfer-browser-stat"><span class="label">已选</span><span class="value" id="cleanupSelectedCount">${allIds.length}</span></div>
     </div>
   `;
-  const ruleStats = (data.rules && data.rules.length) ? data.rules : buildCleanupRuleStatsFromItems(items);
+  const ruleStats =
+    data.rules && data.rules.length
+      ? data.rules
+      : buildCleanupRuleStatsFromItems(items);
   const rules = ruleStats
-    .map((rule) => `<div class="cleanup-rule-chip"><strong>${escapeHtml(rule.rule_name)}</strong><span>${rule.count} 项 / ${formatBytes(rule.total_size || 0)}</span></div>`)
+    .map(
+      (rule) =>
+        `<div class="cleanup-rule-chip"><strong>${escapeHtml(rule.rule_name)}</strong><span>${rule.count} 项 / ${formatBytes(rule.total_size || 0)}</span></div>`,
+    )
     .join("");
   const itemRows = items
     .map((item) => {
@@ -1358,19 +1594,25 @@ function renderCleanupPreview(data) {
     };
   });
   const selBtn = document.getElementById("cleanupSelectAllBtn");
-  if (selBtn) selBtn.onclick = () => {
-    state.cleanupSelected = allIds;
-    root.querySelectorAll(".cleanup-item-cb").forEach((cb) => { cb.checked = true; });
-    const countEl = document.getElementById("cleanupSelectedCount");
-    if (countEl) countEl.textContent = allIds.length;
-  };
+  if (selBtn)
+    selBtn.onclick = () => {
+      state.cleanupSelected = allIds;
+      root.querySelectorAll(".cleanup-item-cb").forEach((cb) => {
+        cb.checked = true;
+      });
+      const countEl = document.getElementById("cleanupSelectedCount");
+      if (countEl) countEl.textContent = allIds.length;
+    };
   const deselBtn = document.getElementById("cleanupDeselectAllBtn");
-  if (deselBtn) deselBtn.onclick = () => {
-    state.cleanupSelected = [];
-    root.querySelectorAll(".cleanup-item-cb").forEach((cb) => { cb.checked = false; });
-    const countEl = document.getElementById("cleanupSelectedCount");
-    if (countEl) countEl.textContent = "0";
-  };
+  if (deselBtn)
+    deselBtn.onclick = () => {
+      state.cleanupSelected = [];
+      root.querySelectorAll(".cleanup-item-cb").forEach((cb) => {
+        cb.checked = false;
+      });
+      const countEl = document.getElementById("cleanupSelectedCount");
+      if (countEl) countEl.textContent = "0";
+    };
 }
 
 function isMaskedSecret(value) {
@@ -1393,9 +1635,12 @@ function setSecretInput(id, masked) {
 function splitProxyUrl(proxyUrl) {
   const raw = (proxyUrl || "").trim();
   if (!raw) return { scheme: "http://", addr: "" };
-  if (raw.startsWith("socks5://")) return { scheme: "socks5://", addr: raw.slice(9) };
-  if (raw.startsWith("http://")) return { scheme: "http://", addr: raw.slice(7) };
-  if (raw.startsWith("https://")) return { scheme: "http://", addr: raw.slice(8) };
+  if (raw.startsWith("socks5://"))
+    return { scheme: "socks5://", addr: raw.slice(9) };
+  if (raw.startsWith("http://"))
+    return { scheme: "http://", addr: raw.slice(7) };
+  if (raw.startsWith("https://"))
+    return { scheme: "http://", addr: raw.slice(8) };
   return { scheme: "http://", addr: raw };
 }
 
@@ -1406,8 +1651,11 @@ function combineProxyUrl() {
 }
 
 function syncSearchLimitControls() {
-  const pansouEnabled = !!document.getElementById("pansouSearchLimitEnabled")?.checked;
-  const prowlarrEnabled = !!document.getElementById("prowlarrSearchLimitEnabled")?.checked;
+  const pansouEnabled = !!document.getElementById("pansouSearchLimitEnabled")
+    ?.checked;
+  const prowlarrEnabled = !!document.getElementById(
+    "prowlarrSearchLimitEnabled",
+  )?.checked;
   document.getElementById("pansouSearchLimit").disabled = !pansouEnabled;
   document.getElementById("prowlarrSearchLimit").disabled = !prowlarrEnabled;
 }
@@ -1431,7 +1679,8 @@ function formatSearchProgress(data) {
   if (!providers.length) return "正在搜索资源...";
   const parts = providers.map((item) => {
     const name = item.provider === "pansou" ? "PanSou" : "Prowlarr";
-    if (item.status === "succeeded") return `${name} 完成${item.count != null ? `(${item.count})` : ""}`;
+    if (item.status === "succeeded")
+      return `${name} 完成${item.count != null ? `(${item.count})` : ""}`;
     if (item.status === "failed") return `${name} 失败`;
     if (item.status === "running") return `${name} 搜索中`;
     return `${name} 排队中`;
@@ -1442,7 +1691,9 @@ function formatSearchProgress(data) {
 async function pollSearchProgress(requestId, stopRef) {
   while (!stopRef.done) {
     try {
-      const progress = await api(`/search/progress/${encodeURIComponent(requestId)}`);
+      const progress = await api(
+        `/search/progress/${encodeURIComponent(requestId)}`,
+      );
       if (stopRef.done) return;
       setStatus(formatSearchProgress(progress));
       if (progress.finished) return;
@@ -1457,7 +1708,9 @@ async function loadSettings() {
   const data = await api("/settings");
   state.settings = data;
   state.imageMode = data.tmdb_use_proxy ? "proxy" : "direct";
-  const modeRadio = document.querySelector(`input[name="imgMode"][value="${state.imageMode}"]`);
+  const modeRadio = document.querySelector(
+    `input[name="imgMode"][value="${state.imageMode}"]`,
+  );
   if (modeRadio) modeRadio.checked = true;
 
   state.secretMasks.tmdb = data.tmdb_api_key_masked || "";
@@ -1470,20 +1723,33 @@ async function loadSettings() {
   state.secretMasks.pan123 = data.pan123_password_masked || "";
 
   document.getElementById("tmdbBaseUrl").value = data.tmdb_base_url || "";
-  document.getElementById("tmdbImageBaseUrl").value = data.tmdb_image_base_url || "";
-  setSecretInput("tmdbApiKey", data.tmdb_api_key || data.tmdb_api_key_masked || "");
+  document.getElementById("tmdbImageBaseUrl").value =
+    data.tmdb_image_base_url || "";
+  setSecretInput(
+    "tmdbApiKey",
+    data.tmdb_api_key || data.tmdb_api_key_masked || "",
+  );
   document.getElementById("tmdbUseProxy").checked = !!data.tmdb_use_proxy;
 
   document.getElementById("enablePansou").checked = !!data.enable_pansou;
   document.getElementById("pansouBaseUrl").value = data.pansou_base_url || "";
-  document.getElementById("pansouSearchPath").value = data.pansou_search_path || "/api/search";
-  document.getElementById("pansouSearchMethod").value = (data.pansou_search_method || "POST").toUpperCase();
+  document.getElementById("pansouSearchPath").value =
+    data.pansou_search_path || "/api/search";
+  document.getElementById("pansouSearchMethod").value = (
+    data.pansou_search_method || "POST"
+  ).toUpperCase();
   document.getElementById("pansouUseProxy").checked = !!data.pansou_use_proxy;
-  document.getElementById("pansouEnableAuth").checked = !!data.pansou_enable_auth;
+  document.getElementById("pansouEnableAuth").checked =
+    !!data.pansou_enable_auth;
   document.getElementById("pansouUsername").value = data.pansou_username || "";
-  document.getElementById("pansouSearchLimitEnabled").checked = data.pansou_search_limit_enabled !== false;
-  document.getElementById("pansouSearchLimit").value = data.pansou_search_limit || 500;
-  setSecretInput("pansouPassword", data.pansou_password || data.pansou_password_masked || "");
+  document.getElementById("pansouSearchLimitEnabled").checked =
+    data.pansou_search_limit_enabled !== false;
+  document.getElementById("pansouSearchLimit").value =
+    data.pansou_search_limit || 500;
+  setSecretInput(
+    "pansouPassword",
+    data.pansou_password || data.pansou_password_masked || "",
+  );
   document.getElementById("pansouSource").value = data.pansou_source || "all";
   state.pansouCloudTypes = (data.pansou_cloud_types || "")
     .split(",")
@@ -1493,31 +1759,67 @@ async function loadSettings() {
   renderPansouCloudTypeChips();
 
   document.getElementById("enableProwlarr").checked = !!data.enable_prowlarr;
-  document.getElementById("prowlarrBaseUrl").value = data.prowlarr_base_url || "";
-  document.getElementById("prowlarrUseProxy").checked = !!data.prowlarr_use_proxy;
-  document.getElementById("prowlarrSearchLimitEnabled").checked = data.prowlarr_search_limit_enabled !== false;
-  document.getElementById("prowlarrSearchLimit").value = data.prowlarr_search_limit || 100;
-  setSecretInput("prowlarrApiKey", data.prowlarr_api_key || data.prowlarr_api_key_masked || "");
+  document.getElementById("prowlarrBaseUrl").value =
+    data.prowlarr_base_url || "";
+  document.getElementById("prowlarrUseProxy").checked =
+    !!data.prowlarr_use_proxy;
+  document.getElementById("prowlarrSearchLimitEnabled").checked =
+    data.prowlarr_search_limit_enabled !== false;
+  document.getElementById("prowlarrSearchLimit").value =
+    data.prowlarr_search_limit || 100;
+  setSecretInput(
+    "prowlarrApiKey",
+    data.prowlarr_api_key || data.prowlarr_api_key_masked || "",
+  );
   syncSearchLimitControls();
+  document.getElementById("searchFilterEnabled").checked =
+    data.search_filter_enabled !== false;
+  state.defaultSearchFilterRules = parseSearchFilterRules(
+    data.search_filter_default_rules || "",
+  );
+  state.searchFilterRules = parseSearchFilterRules(
+    data.search_filter_rules || "",
+  );
+  document.getElementById("searchFilterRuleText").value =
+    searchFilterTextFromRules(state.searchFilterRules);
 
   document.getElementById("c115BaseUrl").value = data.c115_base_url || "";
-  setSecretInput("c115Cookie", data.c115_cookie || data.c115_cookie_masked || "");
-  setSecretInput("quarkCookie", data.quark_cookie || data.quark_cookie_masked || "");
+  setSecretInput(
+    "c115Cookie",
+    data.c115_cookie || data.c115_cookie_masked || "",
+  );
+  setSecretInput(
+    "quarkCookie",
+    data.quark_cookie || data.quark_cookie_masked || "",
+  );
   document.getElementById("tianyiUsername").value = data.tianyi_username || "";
-  setSecretInput("tianyiPassword", data.tianyi_password || data.tianyi_password_masked || "");
+  setSecretInput(
+    "tianyiPassword",
+    data.tianyi_password || data.tianyi_password_masked || "",
+  );
   document.getElementById("pan123Username").value = data.pan123_username || "";
-  setSecretInput("pan123Password", data.pan123_password || data.pan123_password_masked || "");
-  document.getElementById("resourceFilterEnabled").checked = data.resource_filter_enabled !== false;
-  state.resourceFilterRules = parseResourceFilterRules(data.resource_filter_rules || "");
+  setSecretInput(
+    "pan123Password",
+    data.pan123_password || data.pan123_password_masked || "",
+  );
+  document.getElementById("resourceFilterEnabled").checked =
+    data.resource_filter_enabled !== false;
+  state.resourceFilterRules = parseResourceFilterRules(
+    data.resource_filter_rules || "",
+  );
   renderFilterRules();
-  state.settings.resource_cleanup_local_roots = data.resource_cleanup_local_roots || "";
-  state.settings.storage_providers = data.storage_providers || state.settings.storage_providers || "";
+  state.settings.resource_cleanup_local_roots =
+    data.resource_cleanup_local_roots || "";
+  state.settings.storage_providers =
+    data.storage_providers || state.settings.storage_providers || "";
   renderCleanupCloudProviderOptions();
   renderCleanupLocalRoots();
 
-  document.getElementById("systemUsername").value = data.system_username || "admin";
+  document.getElementById("systemUsername").value =
+    data.system_username || "admin";
   setSecretInput("systemPassword", "");
-  document.getElementById("systemProxyEnabled").checked = !!data.system_proxy_enabled;
+  document.getElementById("systemProxyEnabled").checked =
+    !!data.system_proxy_enabled;
   const proxy = splitProxyUrl(data.system_proxy_url || "");
   document.getElementById("systemProxyScheme").value = proxy.scheme;
   document.getElementById("systemProxyAddr").value = proxy.addr;
@@ -1528,8 +1830,16 @@ async function loadSettings() {
   setCleanupActionButton("local");
 
   showMaskedHint("tmdbApiKeyHint", "TMDB Key", data.tmdb_api_key_masked || "");
-  showMaskedHint("prowlarrApiKeyHint", "Prowlarr Key", data.prowlarr_api_key_masked || "");
-  showMaskedHint("pansouPasswordHint", "PanSou 密码", data.pansou_password_masked || "");
+  showMaskedHint(
+    "prowlarrApiKeyHint",
+    "Prowlarr Key",
+    data.prowlarr_api_key_masked || "",
+  );
+  showMaskedHint(
+    "pansouPasswordHint",
+    "PanSou 密码",
+    data.pansou_password_masked || "",
+  );
   showMaskedHint("systemPasswordHint", "设置新密码", "");
 }
 
@@ -1538,17 +1848,30 @@ async function saveSettings(event) {
 
   const payload = {
     tmdb_base_url: document.getElementById("tmdbBaseUrl").value.trim(),
-    tmdb_image_base_url: document.getElementById("tmdbImageBaseUrl").value.trim(),
+    tmdb_image_base_url: document
+      .getElementById("tmdbImageBaseUrl")
+      .value.trim(),
     tmdb_use_proxy: document.getElementById("tmdbUseProxy").checked,
 
     enable_pansou: document.getElementById("enablePansou").checked,
     pansou_base_url: document.getElementById("pansouBaseUrl").value.trim(),
-    pansou_search_path: document.getElementById("pansouSearchPath").value.trim() || "/api/search",
+    pansou_search_path:
+      document.getElementById("pansouSearchPath").value.trim() || "/api/search",
     pansou_search_method: document.getElementById("pansouSearchMethod").value,
-    pansou_cloud_types: document.getElementById("pansouCloudTypes").value.trim(),
+    pansou_cloud_types: document
+      .getElementById("pansouCloudTypes")
+      .value.trim(),
     pansou_source: document.getElementById("pansouSource").value,
-    pansou_search_limit_enabled: document.getElementById("pansouSearchLimitEnabled").checked,
-    pansou_search_limit: Math.max(1, Math.min(5000, Number(document.getElementById("pansouSearchLimit").value) || 500)),
+    pansou_search_limit_enabled: document.getElementById(
+      "pansouSearchLimitEnabled",
+    ).checked,
+    pansou_search_limit: Math.max(
+      1,
+      Math.min(
+        5000,
+        Number(document.getElementById("pansouSearchLimit").value) || 500,
+      ),
+    ),
     pansou_use_proxy: document.getElementById("pansouUseProxy").checked,
     pansou_enable_auth: document.getElementById("pansouEnableAuth").checked,
     pansou_username: document.getElementById("pansouUsername").value.trim(),
@@ -1556,14 +1879,28 @@ async function saveSettings(event) {
     enable_prowlarr: document.getElementById("enableProwlarr").checked,
     prowlarr_base_url: document.getElementById("prowlarrBaseUrl").value.trim(),
     prowlarr_use_proxy: document.getElementById("prowlarrUseProxy").checked,
-    prowlarr_search_limit_enabled: document.getElementById("prowlarrSearchLimitEnabled").checked,
-    prowlarr_search_limit: Math.max(1, Math.min(5000, Number(document.getElementById("prowlarrSearchLimit").value) || 100)),
+    prowlarr_search_limit_enabled: document.getElementById(
+      "prowlarrSearchLimitEnabled",
+    ).checked,
+    prowlarr_search_limit: Math.max(
+      1,
+      Math.min(
+        5000,
+        Number(document.getElementById("prowlarrSearchLimit").value) || 100,
+      ),
+    ),
+    search_filter_enabled: document.getElementById("searchFilterEnabled")
+      .checked,
+    search_filter_rules: serializeSearchFilterRules(),
 
     c115_base_url: document.getElementById("c115BaseUrl").value.trim(),
-    storage_providers: state.settings.storage_providers || "115,quark,tianyi,123",
-    resource_filter_enabled: document.getElementById("resourceFilterEnabled").checked,
+    storage_providers:
+      state.settings.storage_providers || "115,quark,tianyi,123",
+    resource_filter_enabled: document.getElementById("resourceFilterEnabled")
+      .checked,
     resource_filter_rules: serializeFilterRules(),
-    resource_cleanup_local_roots: state.settings.resource_cleanup_local_roots || "",
+    resource_cleanup_local_roots:
+      state.settings.resource_cleanup_local_roots || "",
     tianyi_username: document.getElementById("tianyiUsername").value.trim(),
     pan123_username: document.getElementById("pan123Username").value.trim(),
 
@@ -1580,22 +1917,36 @@ async function saveSettings(event) {
   const quarkCookie = document.getElementById("quarkCookie").value.trim();
   const tianyiPassword = document.getElementById("tianyiPassword").value.trim();
   const pan123Password = document.getElementById("pan123Password").value.trim();
+  state.searchFilterRules = parseSearchFilterText(
+    document.getElementById("searchFilterRuleText").value,
+  );
+  payload.search_filter_rules = serializeSearchFilterRules();
 
-  if (tmdbApiKey && !isMaskedSecret(tmdbApiKey)) payload.tmdb_api_key = tmdbApiKey;
-  if (prowlarrApiKey && !isMaskedSecret(prowlarrApiKey)) payload.prowlarr_api_key = prowlarrApiKey;
-  if (c115Cookie && !isMaskedSecret(c115Cookie)) payload.c115_cookie = c115Cookie;
-  if (pansouPassword && !isMaskedSecret(pansouPassword)) payload.pansou_password = pansouPassword;
-  if (systemPassword && !isMaskedSecret(systemPassword)) payload.system_password = systemPassword;
-  if (quarkCookie && !isMaskedSecret(quarkCookie)) payload.quark_cookie = quarkCookie;
-  if (tianyiPassword && !isMaskedSecret(tianyiPassword)) payload.tianyi_password = tianyiPassword;
-  if (pan123Password && !isMaskedSecret(pan123Password)) payload.pan123_password = pan123Password;
+  if (tmdbApiKey && !isMaskedSecret(tmdbApiKey))
+    payload.tmdb_api_key = tmdbApiKey;
+  if (prowlarrApiKey && !isMaskedSecret(prowlarrApiKey))
+    payload.prowlarr_api_key = prowlarrApiKey;
+  if (c115Cookie && !isMaskedSecret(c115Cookie))
+    payload.c115_cookie = c115Cookie;
+  if (pansouPassword && !isMaskedSecret(pansouPassword))
+    payload.pansou_password = pansouPassword;
+  if (systemPassword && !isMaskedSecret(systemPassword))
+    payload.system_password = systemPassword;
+  if (quarkCookie && !isMaskedSecret(quarkCookie))
+    payload.quark_cookie = quarkCookie;
+  if (tianyiPassword && !isMaskedSecret(tianyiPassword))
+    payload.tianyi_password = tianyiPassword;
+  if (pan123Password && !isMaskedSecret(pan123Password))
+    payload.pan123_password = pan123Password;
 
   const passwordChanged = !!systemPassword && !isMaskedSecret(systemPassword);
   try {
     await api("/settings", { method: "PUT", body: JSON.stringify(payload) });
     if (passwordChanged) {
       setStatus("设置已保存，请重新登录");
-      setTimeout(() => { window.location.href = "/"; }, 1500);
+      setTimeout(() => {
+        window.location.href = "/";
+      }, 1500);
       return;
     }
     await loadSettings();
@@ -1603,7 +1954,9 @@ async function saveSettings(event) {
   } catch (error) {
     if (passwordChanged) {
       setStatus("设置已保存，请重新登录");
-      setTimeout(() => { window.location.href = "/"; }, 1500);
+      setTimeout(() => {
+        window.location.href = "/";
+      }, 1500);
     } else {
       setStatus(`保存设置失败：${error.message}`, "warn");
     }
@@ -1612,7 +1965,9 @@ async function saveSettings(event) {
 
 async function testProvider(provider) {
   const resultEl = document.getElementById(`testResult-${provider}`);
-  const btn = document.querySelector(`.btn-test-provider[data-provider="${provider}"]`);
+  const btn = document.querySelector(
+    `.btn-test-provider[data-provider="${provider}"]`,
+  );
   const writeResult = (text, level = "ok") => {
     if (!resultEl) return;
     resultEl.textContent = text;
@@ -1632,7 +1987,7 @@ async function testProvider(provider) {
     }
     writeResult(
       `${first.provider}：${first.ok ? "OK" : "FAIL"} (${first.message})`,
-      first.ok ? "ok" : "warn"
+      first.ok ? "ok" : "warn",
     );
   } catch (error) {
     writeResult(`测试失败：${error.message}`, "warn");
@@ -1664,7 +2019,9 @@ function renderReleaseNotes(data) {
       const date = escapeHtml(String(item.date || "-"));
       const changes = Array.isArray(item.changes) ? item.changes : [];
       const changeItems = changes.length
-        ? changes.map((change) => `<li>${escapeHtml(String(change || ""))}</li>`).join("")
+        ? changes
+            .map((change) => `<li>${escapeHtml(String(change || ""))}</li>`)
+            .join("")
         : "<li>暂无更新条目</li>";
       return `
         <article class="release-note-item">
@@ -1695,7 +2052,9 @@ function renderReleaseUpdateStatus(data, loading = false) {
     return;
   }
   const currentVersion = escapeHtml(String(data?.current_version || "unknown"));
-  const latestVersion = escapeHtml(String(data?.latest_version || currentVersion));
+  const latestVersion = escapeHtml(
+    String(data?.latest_version || currentVersion),
+  );
   const checkError = data?.check_error ? String(data.check_error) : "";
   const hasUpdate = !!data?.has_update;
   if (checkError) {
@@ -1721,12 +2080,20 @@ function renderReleaseUpdateStatus(data, loading = false) {
   }
   const latest = data?.latest_release_note || {};
   const changes = Array.isArray(latest.changes) ? latest.changes : [];
-  const instructions = Array.isArray(data?.docker_update_instructions) ? data.docker_update_instructions : [];
+  const instructions = Array.isArray(data?.docker_update_instructions)
+    ? data.docker_update_instructions
+    : [];
   const changesHtml = changes.length
-    ? changes.map((change) => `<li>${escapeHtml(String(change || ""))}</li>`).join("")
+    ? changes
+        .map((change) => `<li>${escapeHtml(String(change || ""))}</li>`)
+        .join("")
     : "<li>暂无更新条目</li>";
   const instructionsHtml = instructions.length
-    ? instructions.map((line) => `<li><code>${escapeHtml(String(line || ""))}</code></li>`).join("")
+    ? instructions
+        .map(
+          (line) => `<li><code>${escapeHtml(String(line || ""))}</code></li>`,
+        )
+        .join("")
     : "<li>docker pull & restart 容器</li>";
   box.className = "release-update-status has-update";
   box.innerHTML = `
@@ -1756,7 +2123,7 @@ async function checkReleaseUpdate() {
         current_version: "unknown",
         check_error: error?.message || "未知错误",
       },
-      false
+      false,
     );
   } finally {
     setButtonLoading(btn, false);
@@ -1783,7 +2150,7 @@ async function loadReleaseNotes() {
         current_version: "unknown",
         check_error: error?.message || "未知错误",
       },
-      false
+      false,
     );
   }
 }
@@ -1797,14 +2164,15 @@ async function loadLogs() {
   const level = document.getElementById("logLevelFilter").value;
   const data = await api(`/logs?level=${encodeURIComponent(level)}&limit=300`);
   const root = document.getElementById("logsList");
-  root.innerHTML = (data.items || [])
-    .slice()
-    .reverse()
-    .map((row) => {
-      const time = new Date(row.time).toLocaleString();
-      return `<div class="log-row ${escapeHtml(String(row.level || "").toLowerCase())}"><span>${escapeHtml(time)}</span><b>${escapeHtml(row.level)}</b><code>${escapeHtml(row.message)}</code></div>`;
-    })
-    .join("") || '<div class="dir-item">暂无日志</div>';
+  root.innerHTML =
+    (data.items || [])
+      .slice()
+      .reverse()
+      .map((row) => {
+        const time = new Date(row.time).toLocaleString();
+        return `<div class="log-row ${escapeHtml(String(row.level || "").toLowerCase())}"><span>${escapeHtml(time)}</span><b>${escapeHtml(row.level)}</b><code>${escapeHtml(row.message)}</code></div>`;
+      })
+      .join("") || '<div class="dir-item">暂无日志</div>';
 }
 
 async function ensureAuth() {
@@ -1860,10 +2228,12 @@ async function doLogin(event) {
 
 async function loadDirList(parentId, provider) {
   if (provider === "local") {
-    return await api(`/storage/local-dirs?parent_path=${encodeURIComponent(parentId || "")}`);
+    return await api(
+      `/storage/local-dirs?parent_path=${encodeURIComponent(parentId || "")}`,
+    );
   }
   return await api(
-    `/storage/dirs?parent_id=${encodeURIComponent(parentId)}&provider=${encodeURIComponent(provider)}`
+    `/storage/dirs?parent_id=${encodeURIComponent(parentId)}&provider=${encodeURIComponent(provider)}`,
   );
 }
 
@@ -1900,7 +2270,13 @@ function normalizeDirPickerStack(data, current) {
   return stack;
 }
 
-async function openDirPicker(initialId, initialPath, provider, sourceUri, onConfirm) {
+async function openDirPicker(
+  initialId,
+  initialPath,
+  provider,
+  sourceUri,
+  onConfirm,
+) {
   state.dirPicker.stack = [{ id: initialId || "0", path: initialPath || "/" }];
   state.dirPicker.provider = provider || "115";
   state.dirPicker.sourceUri = sourceUri || "";
@@ -1917,7 +2293,10 @@ async function renderDirPicker() {
   document.getElementById("dirPickerPath").textContent = current.path || "/";
   listBox.innerHTML = '<div class="dir-item">加载中...</div>';
   try {
-    const data = await loadDirList(current.id, state.dirPicker.provider || "115");
+    const data = await loadDirList(
+      current.id,
+      state.dirPicker.provider || "115",
+    );
     if (renderSeq !== state.dirPicker.renderSeq) return;
     const nextStack = normalizeDirPickerStack(data, current);
     if (nextStack.length) {
@@ -1938,9 +2317,14 @@ async function renderDirPicker() {
       btn.className = "dir-item";
       btn.textContent = item.name;
       btn.onclick = async () => {
-        const nextPath = state.dirPicker.provider === "local"
-          ? (item.id || item.name || "/")
-          : ((current.path === "/" ? "" : current.path) + "/" + item.name).replaceAll("//", "/");
+        const nextPath =
+          state.dirPicker.provider === "local"
+            ? item.id || item.name || "/"
+            : (
+                (current.path === "/" ? "" : current.path) +
+                "/" +
+                item.name
+              ).replaceAll("//", "/");
         state.dirPicker.stack.push({ id: item.id, path: nextPath });
         await renderDirPicker();
       };
@@ -1986,17 +2370,24 @@ function transferItemsPath() {
 
 function syncCurrentTransferChecks() {
   state.transfer.selectedIds = Array.from(
-    Array.from(document.querySelectorAll("#transferItemsList input[type='checkbox']:checked"))
+    Array.from(
+      document.querySelectorAll(
+        "#transferItemsList input[type='checkbox']:checked",
+      ),
+    )
       .map((el) => el.getAttribute("data-id") || "")
-      .filter(Boolean)
+      .filter(Boolean),
   );
 }
 
 function updateTransferSelectionSummary() {
   const currentItems = state.transfer.items || [];
-  const selectedInCurrent = currentItems.filter((x) => state.transfer.selectedIds.includes(x.id)).length;
+  const selectedInCurrent = currentItems.filter((x) =>
+    state.transfer.selectedIds.includes(x.id),
+  ).length;
   const summary = document.getElementById("transferSelectSummary");
-  if (summary) summary.textContent = `已选 ${state.transfer.selectedIds.length} 个，当前目录 ${selectedInCurrent}/${currentItems.length}`;
+  if (summary)
+    summary.textContent = `已选 ${state.transfer.selectedIds.length} 个，当前目录 ${selectedInCurrent}/${currentItems.length}`;
   const btn = document.getElementById("transferSelectAllBtn");
   if (btn) btn.disabled = currentItems.length === 0;
 }
@@ -2007,8 +2398,13 @@ function renderTransferStats() {
   const items = state.transfer.items || [];
   const files = items.filter((item) => !item.is_dir);
   const dirs = items.filter((item) => item.is_dir);
-  const selected = items.filter((item) => state.transfer.selectedIds.includes(item.id));
-  const selectedSize = selected.reduce((sum, item) => sum + (item.is_dir ? 0 : item.size || 0), 0);
+  const selected = items.filter((item) =>
+    state.transfer.selectedIds.includes(item.id),
+  );
+  const selectedSize = selected.reduce(
+    (sum, item) => sum + (item.is_dir ? 0 : item.size || 0),
+    0,
+  );
   const stats = [
     { label: "当前目录", value: `${items.length} 项` },
     { label: "文件夹", value: `${dirs.length} 个` },
@@ -2022,7 +2418,7 @@ function renderTransferStats() {
           <span class="label">${escapeHtml(item.label)}</span>
           <span class="value">${escapeHtml(item.value)}</span>
         </div>
-      `
+      `,
     )
     .join("");
 }
@@ -2031,7 +2427,8 @@ function renderTransferItemsModal() {
   const list = document.getElementById("transferItemsList");
   document.getElementById("transferItemsTitle").textContent =
     `${state.transfer.title || "请选择要转存的资源"}：${transferItemsPath()}`;
-  document.getElementById("transferItemsBackBtn").disabled = state.transfer.stack.length <= 1;
+  document.getElementById("transferItemsBackBtn").disabled =
+    state.transfer.stack.length <= 1;
   list.innerHTML = "";
   updateTransferSelectionSummary();
   renderTransferStats();
@@ -2044,7 +2441,9 @@ function renderTransferItemsModal() {
     row.className = "dir-item transfer-item-row";
     row.dataset.kind = item.is_dir ? "dir" : "file";
     const metaText = item.is_dir ? "文件夹" : formatBytes(item.size);
-    const checked = state.transfer.selectedIds.includes(item.id) ? "checked" : "";
+    const checked = state.transfer.selectedIds.includes(item.id)
+      ? "checked"
+      : "";
     if (item.is_dir) {
       row.innerHTML = `
         <input type="checkbox" data-id="${escapeHtml(item.id)}" ${checked} />
@@ -2075,8 +2474,13 @@ function renderTransferItemsModal() {
         try {
           const data = await loadTransferItems(item.id);
           state.transfer.items = data.items || [];
-          state.transfer.stack.push({ id: item.id, name: item.name || item.id });
-          state.transfer.selectedIds = (state.transfer.items || []).map((x) => x.id);
+          state.transfer.stack.push({
+            id: item.id,
+            name: item.name || item.id,
+          });
+          state.transfer.selectedIds = (state.transfer.items || []).map(
+            (x) => x.id,
+          );
           renderTransferItemsModal();
         } catch (error) {
           list.innerHTML = `<div class="dir-item">加载失败：${escapeHtml(error.message)}</div>`;
@@ -2121,7 +2525,12 @@ function closeTransferItemsModal() {
   setModalVisibility("transferItemsModal", false);
 }
 
-async function doTransferCommit(sourceUri, targetDirId, selectedIds, cloudType) {
+async function doTransferCommit(
+  sourceUri,
+  targetDirId,
+  selectedIds,
+  cloudType,
+) {
   try {
     const result = await api("/transfer/commit", {
       method: "POST",
@@ -2133,11 +2542,15 @@ async function doTransferCommit(sourceUri, targetDirId, selectedIds, cloudType) 
       }),
     });
     const summary = [`任务ID: ${result.task_id}`];
-    if (typeof result.kept_count === "number") summary.push(`保留 ${result.kept_count} 项`);
+    if (typeof result.kept_count === "number")
+      summary.push(`保留 ${result.kept_count} 项`);
     if (typeof result.skipped_count === "number" && result.skipped_count > 0) {
       summary.push(`跳过 ${result.skipped_count} 项`);
     }
-    if (Array.isArray(result.skipped_rules_summary) && result.skipped_rules_summary.length) {
+    if (
+      Array.isArray(result.skipped_rules_summary) &&
+      result.skipped_rules_summary.length
+    ) {
       summary.push(`规则 ${result.skipped_rules_summary.join("，")}`);
     }
     setTransferToast("转存成功，" + summary.join(" / "));
@@ -2154,7 +2567,10 @@ async function previewCleanup(targetType) {
   if (targetType === "local") {
     if (!state.cleanupTarget.localRoot) throw new Error("请先选择本地目录");
     appendCleanupLog(`本地开始扫描目录: ${state.cleanupTarget.localRoot}`);
-    const es = new EventSource(`/cleanup/stream?local_root=${encodeURIComponent(state.cleanupTarget.localRoot)}`, { withCredentials: true });
+    const es = new EventSource(
+      `/cleanup/stream?local_root=${encodeURIComponent(state.cleanupTarget.localRoot)}`,
+      { withCredentials: true },
+    );
     state.cleanupAbort.local = () => {
       stopped = true;
       es.close();
@@ -2187,14 +2603,20 @@ async function previewCleanup(targetType) {
       });
       es.addEventListener("error", (e) => {
         const msg = (e && e.data) || "连接异常";
-        if (stopped) { resolve(); return; }
+        if (stopped) {
+          resolve();
+          return;
+        }
         appendCleanupLog(`扫描错误：${msg}`);
         es.close();
         reject(new Error(msg));
       });
       es.onerror = () => {
         if (es.readyState === EventSource.CLOSED && !lastResult) {
-          if (stopped) { resolve(); return; }
+          if (stopped) {
+            resolve();
+            return;
+          }
           if (state.cleanupPreviewTokens.local) {
             resolve();
             return;
@@ -2212,14 +2634,18 @@ async function previewCleanup(targetType) {
         renderCleanupPreview({
           preview_token: state.cleanupPreviewTokens.local,
           total_matches: matchItems.length,
-          total_size: matchItems.reduce((sum, item) => sum + (item.size || 0), 0),
+          total_size: matchItems.reduce(
+            (sum, item) => sum + (item.size || 0),
+            0,
+          ),
           rules: stoppedRules,
           items: matchItems,
         });
         appendCleanupLog(`本地扫描已停止，已匹配 ${matchItems.length} 项`);
         const status = document.getElementById("cleanupLocalStatusText");
         if (status) status.textContent = `扫描已停止，${matchItems.length} 项`;
-        document.getElementById("cleanupLocalExecuteBtn").disabled = matchItems.length === 0;
+        document.getElementById("cleanupLocalExecuteBtn").disabled =
+          matchItems.length === 0;
       } else {
         appendCleanupLog("本地扫描已停止");
       }
@@ -2238,13 +2664,18 @@ async function previewCleanup(targetType) {
   if (!CLEANUP_IMPLEMENTED_PROVIDERS.has(provider)) {
     throw new Error("该网盘暂未支持清理");
   }
-  appendCleanupLog(`网盘开始扫描目录: ${state.cleanupTarget.parentPath || "/"}`);
+  appendCleanupLog(
+    `网盘开始扫描目录: ${state.cleanupTarget.parentPath || "/"}`,
+  );
   startCleanupLogTail();
   let data;
   try {
     data = await api("/cleanup/preview", {
       method: "POST",
-      body: JSON.stringify({ provider, parent_id: state.cleanupTarget.parentId || "0" }),
+      body: JSON.stringify({
+        provider,
+        parent_id: state.cleanupTarget.parentId || "0",
+      }),
     });
     await pumpCleanupLogs();
   } finally {
@@ -2267,7 +2698,9 @@ async function executeCleanup(targetType) {
     const selectedIds = state.cleanupSelected.slice();
     appendCleanupLog(`本地清理开始: ${state.cleanupTarget.localRoot || "-"}`);
     const controller = new AbortController();
-    state.cleanupAbort.local = () => { controller.abort(); };
+    state.cleanupAbort.local = () => {
+      controller.abort();
+    };
     document.getElementById("cleanupLocalStopBtn").hidden = false;
     let data;
     try {
@@ -2275,9 +2708,15 @@ async function executeCleanup(targetType) {
         method: "POST",
         headers: { "content-type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ preview_token: token, selected_ids: selectedIds }),
+        body: JSON.stringify({
+          preview_token: token,
+          selected_ids: selectedIds,
+        }),
         signal: controller.signal,
-      }).then(r => { if (!r.ok) throw new Error("请求失败"); return r.json(); });
+      }).then((r) => {
+        if (!r.ok) throw new Error("请求失败");
+        return r.json();
+      });
     } catch (err) {
       if (err.name === "AbortError") {
         appendCleanupLog("本地清理已停止");
@@ -2297,7 +2736,8 @@ async function executeCleanup(targetType) {
     document.getElementById("cleanupLocalExecuteBtn").disabled = true;
     return data;
   }
-  if (!state.cleanupPreviewTokens.cloud) throw new Error("请先执行网盘扫描预览");
+  if (!state.cleanupPreviewTokens.cloud)
+    throw new Error("请先执行网盘扫描预览");
   appendCleanupLog("网盘清理开始");
   const data = await api("/cleanup/execute", {
     method: "POST",
@@ -2313,7 +2753,9 @@ async function executeCleanup(targetType) {
 }
 
 function selectedRows() {
-  return state.filtered.filter((row) => state.selectedResultIds.has(resultId(row)));
+  return state.filtered.filter((row) =>
+    state.selectedResultIds.has(resultId(row)),
+  );
 }
 
 async function batchTransferSelected() {
@@ -2328,13 +2770,26 @@ async function batchTransferSelected() {
     if (!sourceUri) continue;
     const check = await api("/tasks/offline/check", {
       method: "POST",
-      body: JSON.stringify({ source_uri: sourceUri, cloud_type: row.cloud_type || "" }),
+      body: JSON.stringify({
+        source_uri: sourceUri,
+        cloud_type: row.cloud_type || "",
+      }),
     });
     if (!check.supported || !check.configured) {
-      setTransferToast(`${row.title || "资源"}：${check.message || "不可转存"}`, "warn");
+      setTransferToast(
+        `${row.title || "资源"}：${check.message || "不可转存"}`,
+        "warn",
+      );
       return;
     }
-    checks.push({ row, check, provider: check.provider === "magnet" || check.provider === "ed2k" ? "115" : check.provider });
+    checks.push({
+      row,
+      check,
+      provider:
+        check.provider === "magnet" || check.provider === "ed2k"
+          ? "115"
+          : check.provider,
+    });
   }
   if (!checks.length) {
     setTransferToast("所选结果没有可转存链接", "warn");
@@ -2342,7 +2797,10 @@ async function batchTransferSelected() {
   }
   const provider = checks[0].provider;
   if (!checks.every((x) => x.provider === provider)) {
-    setTransferToast("批量转存暂只支持同一种目标网盘，请先筛选网盘类型", "warn");
+    setTransferToast(
+      "批量转存暂只支持同一种目标网盘，请先筛选网盘类型",
+      "warn",
+    );
     return;
   }
   const last = getLastDir(provider);
@@ -2382,17 +2840,25 @@ async function openTransferModal(row) {
   try {
     const check = await api("/tasks/offline/check", {
       method: "POST",
-      body: JSON.stringify({ source_uri: sourceUri, cloud_type: row.cloud_type || "" }),
+      body: JSON.stringify({
+        source_uri: sourceUri,
+        cloud_type: row.cloud_type || "",
+      }),
     });
     if (!check.supported || !check.configured) {
       setTransferToast(check.message || "未配置对应网盘", "warn");
       return;
     }
     const provider =
-      check.provider === "magnet" || check.provider === "ed2k" ? "115" : check.provider;
+      check.provider === "magnet" || check.provider === "ed2k"
+        ? "115"
+        : check.provider;
     const prepared = await api("/transfer/prepare", {
       method: "POST",
-      body: JSON.stringify({ source_uri: sourceUri, cloud_type: row.cloud_type || "" }),
+      body: JSON.stringify({
+        source_uri: sourceUri,
+        cloud_type: row.cloud_type || "",
+      }),
     });
     state.transfer.sourceUri = sourceUri;
     state.transfer.provider = provider;
@@ -2407,15 +2873,21 @@ async function openTransferModal(row) {
       const last = getLastDir(provider);
       const dirId = last?.id || state.transfer.defaultDirId || "0";
       const dirPath = last?.path || state.transfer.defaultDirPath || "/";
-      await openDirPicker(dirId, dirPath, provider, sourceUri, async (choice) => {
-        setLastDir(provider, choice);
-        await doTransferCommit(
-          sourceUri,
-          choice.id || "0",
-          state.transfer.selectedIds,
-          row.cloud_type || provider
-        );
-      });
+      await openDirPicker(
+        dirId,
+        dirPath,
+        provider,
+        sourceUri,
+        async (choice) => {
+          setLastDir(provider, choice);
+          await doTransferCommit(
+            sourceUri,
+            choice.id || "0",
+            state.transfer.selectedIds,
+            row.cloud_type || provider,
+          );
+        },
+      );
     };
 
     if (prepared.selectable && state.transfer.items.length) {
@@ -2438,8 +2910,13 @@ async function openTransferModal(row) {
       sourceUri,
       async (choice) => {
         setLastDir(provider, choice);
-        await doTransferCommit(sourceUri, choice.id || "0", [], row.cloud_type || provider);
-      }
+        await doTransferCommit(
+          sourceUri,
+          choice.id || "0",
+          [],
+          row.cloud_type || provider,
+        );
+      },
     );
   } catch (error) {
     setTransferToast("转存准备失败: " + error.message, "warn");
@@ -2464,16 +2941,22 @@ function bindEvents() {
     radio.onchange = () => renderRecommendGrid(state.recommendItems);
   });
 
-  document.getElementById("recommendSourceTabs").querySelectorAll("button").forEach((btn) => {
-    btn.onclick = async () => {
-      document.getElementById("recommendSourceTabs").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
-      btn.classList.add("active");
-      state.recommendSource = btn.dataset.source;
-      state.recommendSearchMode = false;
-      updateRecommendCategoryOptions();
-      await loadRecommend();
-    };
-  });
+  document
+    .getElementById("recommendSourceTabs")
+    .querySelectorAll("button")
+    .forEach((btn) => {
+      btn.onclick = async () => {
+        document
+          .getElementById("recommendSourceTabs")
+          .querySelectorAll("button")
+          .forEach((x) => x.classList.remove("active"));
+        btn.classList.add("active");
+        state.recommendSource = btn.dataset.source;
+        state.recommendSearchMode = false;
+        updateRecommendCategoryOptions();
+        await loadRecommend();
+      };
+    });
   document.getElementById("recommendCategory").onchange = async (e) => {
     state.recommendCategory = e.target.value;
     state.recommendSearchMode = false;
@@ -2489,13 +2972,17 @@ function bindEvents() {
     const keyword = document.getElementById("resourceKeyword").value.trim();
     doResourceSearch(keyword, document.getElementById("resourceSearchBtn"));
   };
-  document.getElementById("resourceKeyword").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      document.getElementById("resourceSearchBtn").click();
-    }
-  });
-  const searchFilterToggleBtn = document.getElementById("searchFilterToggleBtn");
+  document
+    .getElementById("resourceKeyword")
+    .addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        document.getElementById("resourceSearchBtn").click();
+      }
+    });
+  const searchFilterToggleBtn = document.getElementById(
+    "searchFilterToggleBtn",
+  );
   if (searchFilterToggleBtn) {
     searchFilterToggleBtn.onclick = () => {
       const head = document.querySelector(".search-head");
@@ -2503,7 +2990,9 @@ function bindEvents() {
       searchFilterToggleBtn.textContent = opened ? "收起筛选" : "筛选";
     };
   }
-  const recommendFilterToggleBtn = document.getElementById("recommendFilterToggleBtn");
+  const recommendFilterToggleBtn = document.getElementById(
+    "recommendFilterToggleBtn",
+  );
   if (recommendFilterToggleBtn) {
     recommendFilterToggleBtn.onclick = () => {
       const head = document.querySelector(".hero");
@@ -2512,24 +3001,36 @@ function bindEvents() {
     };
   }
 
-  document.getElementById("sourceTabs").querySelectorAll("button").forEach((btn) => {
-    btn.onclick = () => {
-      document.getElementById("sourceTabs").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
-      btn.classList.add("active");
-      state.sourceFilter = btn.dataset.source;
-      applyFilters();
-    };
-  });
+  document
+    .getElementById("sourceTabs")
+    .querySelectorAll("button")
+    .forEach((btn) => {
+      btn.onclick = () => {
+        document
+          .getElementById("sourceTabs")
+          .querySelectorAll("button")
+          .forEach((x) => x.classList.remove("active"));
+        btn.classList.add("active");
+        state.sourceFilter = btn.dataset.source;
+        applyFilters();
+      };
+    });
 
-  document.getElementById("resultViewTabs").querySelectorAll("button").forEach((btn) => {
-    btn.onclick = () => {
-      document.getElementById("resultViewTabs").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
-      btn.classList.add("active");
-      state.resultView = btn.dataset.view;
-      renderResourceList();
-      writeUiStateToUrl();
-    };
-  });
+  document
+    .getElementById("resultViewTabs")
+    .querySelectorAll("button")
+    .forEach((btn) => {
+      btn.onclick = () => {
+        document
+          .getElementById("resultViewTabs")
+          .querySelectorAll("button")
+          .forEach((x) => x.classList.remove("active"));
+        btn.classList.add("active");
+        state.resultView = btn.dataset.view;
+        renderResourceList();
+        writeUiStateToUrl();
+      };
+    });
 
   document.getElementById("cloudTypeFilter").onchange = (e) => {
     state.cloudTypeFilter = e.target.value;
@@ -2541,31 +3042,37 @@ function bindEvents() {
   };
   document.getElementById("toggleResultSelectBtn").onclick = () => {
     state.resultSelectMode = !state.resultSelectMode;
-    document.getElementById("toggleResultSelectBtn").textContent = state.resultSelectMode ? "退出选择" : "选择结果";
+    document.getElementById("toggleResultSelectBtn").textContent =
+      state.resultSelectMode ? "退出选择" : "选择结果";
     if (!state.resultSelectMode) state.selectedResultIds.clear();
     renderResourceList();
   };
 
-  document.getElementById("settingsTabs").querySelectorAll("button").forEach((btn) => {
-    btn.onclick = () => switchSettingsTab(btn.dataset.tab);
-  });
+  document
+    .getElementById("settingsTabs")
+    .querySelectorAll("button")
+    .forEach((btn) => {
+      btn.onclick = () => switchSettingsTab(btn.dataset.tab);
+    });
 
   document.getElementById("settingsForm").onsubmit = saveSettings;
   document.getElementById("saveSettingsTop").onclick = saveSettings;
-  document.querySelectorAll(".btn-secret-toggle[data-secret-target]").forEach((btn) => {
-    btn.onclick = () => {
-      const input = document.getElementById(btn.dataset.secretTarget);
-      if (!input) return;
-      const show = input.type === "password";
-      input.type = show ? "text" : "password";
-      const nextLabel = show ? "隐藏内容" : "显示内容";
-      btn.setAttribute("aria-label", nextLabel);
-      btn.setAttribute("title", nextLabel);
-      btn.setAttribute("aria-pressed", show ? "true" : "false");
-      const text = btn.querySelector(".sr-only");
-      if (text) text.textContent = nextLabel;
-    };
-  });
+  document
+    .querySelectorAll(".btn-secret-toggle[data-secret-target]")
+    .forEach((btn) => {
+      btn.onclick = () => {
+        const input = document.getElementById(btn.dataset.secretTarget);
+        if (!input) return;
+        const show = input.type === "password";
+        input.type = show ? "text" : "password";
+        const nextLabel = show ? "隐藏内容" : "显示内容";
+        btn.setAttribute("aria-label", nextLabel);
+        btn.setAttribute("title", nextLabel);
+        btn.setAttribute("aria-pressed", show ? "true" : "false");
+        const text = btn.querySelector(".sr-only");
+        if (text) text.textContent = nextLabel;
+      };
+    });
   document.getElementById("logoutBtn").onclick = doLogout;
   const themeToggleBtn = document.getElementById("themeToggleBtn");
   if (themeToggleBtn) {
@@ -2594,9 +3101,15 @@ function bindEvents() {
   document.getElementById("addCloudTypeBtn").onclick = () => {
     const value = document.getElementById("pansouCloudTypeSelect").value;
     if (!value) return;
-    if (!state.pansouCloudTypes.includes(value)) state.pansouCloudTypes.push(value);
+    if (!state.pansouCloudTypes.includes(value))
+      state.pansouCloudTypes.push(value);
     syncPansouCloudTypesField();
     renderPansouCloudTypeChips();
+  };
+  document.getElementById("resetSearchFilterRulesBtn").onclick = () => {
+    state.searchFilterRules = defaultSearchFilterRules();
+    document.getElementById("searchFilterRuleText").value =
+      searchFilterTextFromRules(state.searchFilterRules);
   };
   document.getElementById("addFilterRuleBtn").onclick = () => {
     state.resourceFilterRules.push({
@@ -2627,31 +3140,34 @@ function bindEvents() {
         document.getElementById("cleanupLocalExecuteBtn").disabled = true;
         renderCleanupPreview(null);
         renderCleanupTarget();
-        appendCleanupLog(`本地起始目录：${state.cleanupTarget.localRoot || "-"}`);
-      }
+        appendCleanupLog(
+          `本地起始目录：${state.cleanupTarget.localRoot || "-"}`,
+        );
+      },
     );
   };
   const cloudBtn = document.getElementById("cleanupCloudActionBtn");
-  if (cloudBtn) cloudBtn.onclick = async () => {
-    try {
-      if (state.cleanupPhase.cloud === "preview") {
-        await previewCleanup("cloud");
-        setStatus("网盘清理预览完成");
-      } else {
-        if (!state.cleanupPreviewTokens.cloud) {
-          appendCleanupLog("请先执行网盘扫描预览，再执行清理");
-          setStatus("请先执行网盘扫描预览", "warn");
-          return;
+  if (cloudBtn)
+    cloudBtn.onclick = async () => {
+      try {
+        if (state.cleanupPhase.cloud === "preview") {
+          await previewCleanup("cloud");
+          setStatus("网盘清理预览完成");
+        } else {
+          if (!state.cleanupPreviewTokens.cloud) {
+            appendCleanupLog("请先执行网盘扫描预览，再执行清理");
+            setStatus("请先执行网盘扫描预览", "warn");
+            return;
+          }
+          const data = await executeCleanup("cloud");
+          setStatus(`网盘清理完成，已删除 ${data.deleted_count || 0} 项`);
+          renderCleanupPreview(null);
         }
-        const data = await executeCleanup("cloud");
-        setStatus(`网盘清理完成，已删除 ${data.deleted_count || 0} 项`);
-        renderCleanupPreview(null);
+      } catch (error) {
+        appendCleanupLog(`网盘清理失败：${error.message}`);
+        setStatus(`网盘清理失败：${error.message}`, "warn");
       }
-    } catch (error) {
-      appendCleanupLog(`网盘清理失败：${error.message}`);
-      setStatus(`网盘清理失败：${error.message}`, "warn");
-    }
-  };
+    };
   document.getElementById("cleanupLocalPreviewBtn").onclick = async () => {
     try {
       document.getElementById("cleanupLocalExecuteBtn").disabled = true;
@@ -2703,14 +3219,20 @@ function bindEvents() {
     }
     closeDirPicker();
   };
-  document.getElementById("transferItemsCancelBtn").onclick = closeTransferItemsModal;
+  document.getElementById("transferItemsCancelBtn").onclick =
+    closeTransferItemsModal;
   document.getElementById("transferSelectAllBtn").onclick = () => {
     syncCurrentTransferChecks();
     const currentItems = state.transfer.items || [];
-    const allSelected = currentItems.length > 0 && currentItems.every((x) => state.transfer.selectedIds.includes(x.id));
+    const allSelected =
+      currentItems.length > 0 &&
+      currentItems.every((x) => state.transfer.selectedIds.includes(x.id));
     const currentIds = new Set(currentItems.map((x) => x.id));
-    state.transfer.selectedIds = state.transfer.selectedIds.filter((id) => !currentIds.has(id));
-    if (!allSelected) state.transfer.selectedIds.push(...currentItems.map((x) => x.id));
+    state.transfer.selectedIds = state.transfer.selectedIds.filter(
+      (id) => !currentIds.has(id),
+    );
+    if (!allSelected)
+      state.transfer.selectedIds.push(...currentItems.map((x) => x.id));
     renderTransferItemsModal();
   };
   document.getElementById("transferItemsBackBtn").onclick = async () => {
@@ -2723,7 +3245,9 @@ function bindEvents() {
     try {
       const data = await loadTransferItems(parent.id || "");
       state.transfer.items = data.items || [];
-      state.transfer.selectedIds = (state.transfer.items || []).map((x) => x.id);
+      state.transfer.selectedIds = (state.transfer.items || []).map(
+        (x) => x.id,
+      );
       renderTransferItemsModal();
     } catch (error) {
       list.innerHTML = `<div class="dir-item">加载失败：${escapeHtml(error.message)}</div>`;
@@ -2731,9 +3255,13 @@ function bindEvents() {
   };
 
   document.getElementById("loginForm").onsubmit = doLogin;
-  document.getElementById("pansouSearchLimitEnabled").onchange = syncSearchLimitControls;
-  document.getElementById("prowlarrSearchLimitEnabled").onchange = syncSearchLimitControls;
-  const checkReleaseUpdateBtn = document.getElementById("checkReleaseUpdateBtn");
+  document.getElementById("pansouSearchLimitEnabled").onchange =
+    syncSearchLimitControls;
+  document.getElementById("prowlarrSearchLimitEnabled").onchange =
+    syncSearchLimitControls;
+  const checkReleaseUpdateBtn = document.getElementById(
+    "checkReleaseUpdateBtn",
+  );
   if (checkReleaseUpdateBtn) checkReleaseUpdateBtn.onclick = checkReleaseUpdate;
 }
 
@@ -2755,14 +3283,24 @@ async function init() {
   window.addEventListener("resize", syncSearchFilterToggleButtonText);
   applyUiStateFromUrl();
   const initialPage = "search";
-  const sourceBtn = document.querySelector(`#sourceTabs button[data-source="${state.sourceFilter}"]`);
+  const sourceBtn = document.querySelector(
+    `#sourceTabs button[data-source="${state.sourceFilter}"]`,
+  );
   if (sourceBtn) {
-    document.getElementById("sourceTabs").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+    document
+      .getElementById("sourceTabs")
+      .querySelectorAll("button")
+      .forEach((x) => x.classList.remove("active"));
     sourceBtn.classList.add("active");
   }
-  const viewBtn = document.querySelector(`#resultViewTabs button[data-view="${state.resultView}"]`);
+  const viewBtn = document.querySelector(
+    `#resultViewTabs button[data-view="${state.resultView}"]`,
+  );
   if (viewBtn) {
-    document.getElementById("resultViewTabs").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+    document
+      .getElementById("resultViewTabs")
+      .querySelectorAll("button")
+      .forEach((x) => x.classList.remove("active"));
     viewBtn.classList.add("active");
   }
   const cloudTypeFilter = document.getElementById("cloudTypeFilter");

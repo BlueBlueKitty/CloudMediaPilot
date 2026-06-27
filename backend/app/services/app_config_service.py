@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import secrets
 from dataclasses import dataclass
@@ -46,6 +47,7 @@ _ENV_KEYS_ORDER = [
     "STORAGE_PROVIDERS",
     "RESOURCE_FILTER_ENABLED",
     "RESOURCE_FILTER_RULES",
+    "SEARCH_FILTER_ENABLED",
     "RESOURCE_CLEANUP_LOCAL_ROOTS",
     "QUARK_COOKIE",
     "TIANYI_USERNAME",
@@ -58,6 +60,86 @@ _ENV_KEYS_ORDER = [
     "SYSTEM_PASSWORD_HASH",
     "SYSTEM_AUTH_SECRET",
 ]
+
+_SEARCH_FILTER_RULES_FILENAME = "search_filter_rules.json"
+
+
+def _normalize_keyword_list(items: object) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+    return out
+
+
+def _shipped_search_filter_rules_path() -> Path:
+    return Path(__file__).resolve().parents[3] / "config" / _SEARCH_FILTER_RULES_FILENAME
+
+
+def _build_search_filter_rules_json(
+    default_keywords: list[str],
+    custom_keywords: list[str],
+    custom_rules: list[dict[str, object]] | None = None,
+) -> str:
+    rules: list[dict[str, object]] = []
+    seen_keyword_patterns: set[str] = set()
+    for index, pattern in enumerate(default_keywords):
+        rules.append(
+            {
+                "id": f"search-rule-default-{index + 1}",
+                "name": f"默认搜索规则 {index + 1}",
+                "enabled": True,
+                "match_mode": "keyword",
+                "pattern": pattern,
+            }
+        )
+        seen_keyword_patterns.add(pattern.casefold())
+    for index, pattern in enumerate(custom_keywords):
+        key = pattern.casefold()
+        if key in seen_keyword_patterns:
+            continue
+        seen_keyword_patterns.add(key)
+        rules.append(
+            {
+                "id": f"search-rule-custom-{index + 1}",
+                "name": f"自定义搜索规则 {index + 1}",
+                "enabled": True,
+                "match_mode": "keyword",
+                "pattern": pattern,
+            }
+        )
+    for index, row in enumerate(custom_rules or []):
+        if not isinstance(row, dict):
+            continue
+        pattern = str(row.get("pattern") or "").strip()
+        if not pattern:
+            continue
+        match_mode = "regex" if str(row.get("match_mode") or "").strip() == "regex" else "keyword"
+        enabled = row.get("enabled") is not False
+        if match_mode == "keyword" and enabled:
+            key = pattern.casefold()
+            if key in seen_keyword_patterns:
+                continue
+            seen_keyword_patterns.add(key)
+        rules.append(
+            {
+                "id": str(row.get("id") or f"search-rule-extra-{index + 1}"),
+                "name": str(row.get("name") or f"附加搜索规则 {index + 1}"),
+                "enabled": enabled,
+                "match_mode": match_mode,
+                "pattern": pattern,
+            }
+        )
+    return json.dumps(rules, ensure_ascii=False)
 
 
 @dataclass(slots=True)
@@ -100,6 +182,8 @@ class AppConfig:
     storage_providers: str = "115,quark,tianyi,123"
     resource_filter_enabled: bool = True
     resource_filter_rules: str = ""
+    search_filter_enabled: bool = True
+    search_filter_rules: str = ""
     resource_cleanup_local_roots: str = ""
     quark_cookie: str = ""
     tianyi_username: str = ""
@@ -144,6 +228,7 @@ def hash_password(raw: str) -> str:
 class AppConfigStore:
     def __init__(self, env_path: str) -> None:
         self.env_path = Path(env_path)
+        self.search_filter_rules_path = self.env_path.parent / _SEARCH_FILTER_RULES_FILENAME
         self._lock = RLock()
         self.env_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.env_path.exists():
@@ -152,6 +237,7 @@ class AppConfigStore:
             if initial_password:
                 cfg.system_password_hash = hash_password(initial_password)
             self._write_env(self._to_env_map(cfg))
+        self._ensure_search_filter_rules_file()
 
     def _read_env(self) -> dict[str, str]:
         out: dict[str, str] = {}
@@ -176,6 +262,142 @@ class AppConfigStore:
                 lines.append(f"{key}={env_map[key]}")
         lines.append("")
         self.env_path.write_text("\n".join(lines), encoding="utf-8")
+
+    def _default_search_filter_payload(self) -> dict[str, object]:
+        fallback = {
+            "version": 1,
+            "default_keywords": [],
+            "custom_keywords": [],
+            "custom_rules": [],
+        }
+        template_path = _shipped_search_filter_rules_path()
+        if not template_path.exists():
+            return fallback
+        try:
+            parsed = json.loads(template_path.read_text(encoding="utf-8"))
+        except Exception:
+            return fallback
+        if not isinstance(parsed, dict):
+            return fallback
+        return {
+            "version": int(parsed.get("version") or 1),
+            "default_keywords": _normalize_keyword_list(parsed.get("default_keywords") or []),
+            "custom_keywords": _normalize_keyword_list(parsed.get("custom_keywords") or []),
+            "custom_rules": parsed.get("custom_rules")
+            if isinstance(parsed.get("custom_rules"), list)
+            else [],
+        }
+
+    def _search_filter_payload_from_rules(self, raw_rules: str | None) -> dict[str, object]:
+        payload = self._default_search_filter_payload()
+        text = str(raw_rules or "").strip()
+        if not text:
+            return payload
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return payload
+        if not isinstance(parsed, list):
+            return payload
+        default_keywords = _normalize_keyword_list(payload.get("default_keywords") or [])
+        default_keys = {item.casefold() for item in default_keywords}
+        custom_keywords: list[str] = []
+        custom_rules: list[dict[str, object]] = []
+        seen_custom_keywords: set[str] = set()
+        for index, row in enumerate(parsed):
+            if not isinstance(row, dict):
+                continue
+            pattern = str(row.get("pattern") or "").strip()
+            if not pattern:
+                continue
+            match_mode = "regex" if str(row.get("match_mode") or "").strip() == "regex" else "keyword"
+            enabled = row.get("enabled") is not False
+            pattern_key = pattern.casefold()
+            if match_mode == "keyword" and enabled and pattern_key not in default_keys:
+                if pattern_key not in seen_custom_keywords:
+                    seen_custom_keywords.add(pattern_key)
+                    custom_keywords.append(pattern)
+                continue
+            if match_mode == "keyword" and enabled and pattern_key in default_keys:
+                continue
+            custom_rules.append(
+                {
+                    "id": str(row.get("id") or f"search-rule-extra-{index + 1}"),
+                    "name": str(row.get("name") or f"附加搜索规则 {index + 1}"),
+                    "enabled": enabled,
+                    "match_mode": match_mode,
+                    "pattern": pattern,
+                }
+            )
+        payload["custom_keywords"] = custom_keywords
+        payload["custom_rules"] = custom_rules
+        return payload
+
+    def _read_search_filter_payload(self) -> dict[str, object]:
+        if not self.search_filter_rules_path.exists():
+            return self._default_search_filter_payload()
+        try:
+            parsed = json.loads(self.search_filter_rules_path.read_text(encoding="utf-8"))
+        except Exception:
+            return self._default_search_filter_payload()
+        if not isinstance(parsed, dict):
+            return self._default_search_filter_payload()
+        default_payload = self._default_search_filter_payload()
+        return {
+            "version": int(parsed.get("version") or 1),
+            "default_keywords": _normalize_keyword_list(
+                parsed.get("default_keywords") or default_payload.get("default_keywords") or []
+            )
+            or _normalize_keyword_list(default_payload.get("default_keywords") or []),
+            "custom_keywords": _normalize_keyword_list(parsed.get("custom_keywords") or []),
+            "custom_rules": parsed.get("custom_rules")
+            if isinstance(parsed.get("custom_rules"), list)
+            else [],
+        }
+
+    def _write_search_filter_payload(self, payload: dict[str, object]) -> None:
+        default_payload = self._default_search_filter_payload()
+        normalized = {
+            "version": 1,
+            "default_keywords": _normalize_keyword_list(
+                payload.get("default_keywords") or default_payload.get("default_keywords") or []
+            )
+            or _normalize_keyword_list(default_payload.get("default_keywords") or []),
+            "custom_keywords": _normalize_keyword_list(payload.get("custom_keywords") or []),
+            "custom_rules": payload.get("custom_rules")
+            if isinstance(payload.get("custom_rules"), list)
+            else [],
+        }
+        self.search_filter_rules_path.write_text(
+            json.dumps(normalized, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def _ensure_search_filter_rules_file(self) -> None:
+        legacy_rules = self._read_env().get("SEARCH_FILTER_RULES")
+        if self.search_filter_rules_path.exists():
+            return
+        self._write_search_filter_payload(self._search_filter_payload_from_rules(legacy_rules))
+
+    def search_filter_default_rules_json(self) -> str:
+        payload = self._read_search_filter_payload()
+        default_keywords = _normalize_keyword_list(payload.get("default_keywords"))
+        return _build_search_filter_rules_json(default_keywords, [])
+
+    def search_filter_rules_json(self, legacy_rules: str | None = None) -> str:
+        self._ensure_search_filter_rules_file()
+        payload = self._read_search_filter_payload()
+        default_keywords = _normalize_keyword_list(payload.get("default_keywords"))
+        custom_keywords = _normalize_keyword_list(payload.get("custom_keywords"))
+        custom_rules = payload.get("custom_rules") if isinstance(payload.get("custom_rules"), list) else []
+        rules_json = _build_search_filter_rules_json(
+            default_keywords,
+            custom_keywords,
+            custom_rules,  # type: ignore[arg-type]
+        )
+        if rules_json.strip():
+            return rules_json
+        return str(legacy_rules or "").strip()
 
     @staticmethod
     def _to_env_map(cfg: AppConfig) -> dict[str, str]:
@@ -202,7 +424,9 @@ class AppConfigStore:
             "PANSOU_SEARCH_LIMIT_ENABLED": "true" if cfg.pansou_search_limit_enabled else "false",
             "PANSOU_SEARCH_LIMIT": str(cfg.pansou_search_limit),
             "ENABLE_PANSOU": "true" if cfg.enable_pansou else "false",
-            "PROWLARR_SEARCH_LIMIT_ENABLED": "true" if cfg.prowlarr_search_limit_enabled else "false",
+            "PROWLARR_SEARCH_LIMIT_ENABLED": (
+                "true" if cfg.prowlarr_search_limit_enabled else "false"
+            ),
             "PROWLARR_SEARCH_LIMIT": str(cfg.prowlarr_search_limit),
             "C115_BASE_URL": cfg.c115_base_url,
             "C115_COOKIE": cfg.c115_cookie,
@@ -216,6 +440,7 @@ class AppConfigStore:
             "STORAGE_PROVIDERS": cfg.storage_providers,
             "RESOURCE_FILTER_ENABLED": "true" if cfg.resource_filter_enabled else "false",
             "RESOURCE_FILTER_RULES": cfg.resource_filter_rules,
+            "SEARCH_FILTER_ENABLED": "true" if cfg.search_filter_enabled else "false",
             "RESOURCE_CLEANUP_LOCAL_ROOTS": cfg.resource_cleanup_local_roots,
             "QUARK_COOKIE": cfg.quark_cookie,
             "TIANYI_USERNAME": cfg.tianyi_username,
@@ -233,6 +458,8 @@ class AppConfigStore:
         with self._lock:
             env = self._read_env()
             base = AppConfig()
+            self._ensure_search_filter_rules_file()
+            search_filter_rules = self.search_filter_rules_json(env.get("SEARCH_FILTER_RULES"))
             cfg = AppConfig(
                 tmdb_base_url=env.get("TMDB_BASE_URL", base.tmdb_base_url),
                 tmdb_image_base_url=env.get("TMDB_IMAGE_BASE_URL", base.tmdb_image_base_url),
@@ -295,6 +522,11 @@ class AppConfigStore:
                     base.resource_filter_enabled,
                 ),
                 resource_filter_rules=env.get("RESOURCE_FILTER_RULES", base.resource_filter_rules),
+                search_filter_enabled=_to_bool(
+                    env.get("SEARCH_FILTER_ENABLED"),
+                    base.search_filter_enabled,
+                ),
+                search_filter_rules=search_filter_rules,
                 resource_cleanup_local_roots=env.get(
                     "RESOURCE_CLEANUP_LOCAL_ROOTS",
                     base.resource_cleanup_local_roots,
@@ -361,6 +593,8 @@ class AppConfigStore:
         storage_providers: str | None = None,
         resource_filter_enabled: bool | None = None,
         resource_filter_rules: str | None = None,
+        search_filter_enabled: bool | None = None,
+        search_filter_rules: str | None = None,
         resource_cleanup_local_roots: str | None = None,
         quark_cookie: str | None = None,
         tianyi_username: str | None = None,
@@ -521,6 +755,16 @@ class AppConfigStore:
                     if resource_filter_rules is not None
                     else current.resource_filter_rules
                 ),
+                search_filter_enabled=(
+                    search_filter_enabled
+                    if search_filter_enabled is not None
+                    else current.search_filter_enabled
+                ),
+                search_filter_rules=(
+                    search_filter_rules
+                    if search_filter_rules is not None
+                    else current.search_filter_rules
+                ),
                 resource_cleanup_local_roots=(
                     resource_cleanup_local_roots
                     if resource_cleanup_local_roots is not None
@@ -563,7 +807,12 @@ class AppConfigStore:
                     else current.system_auth_secret
                 ),
             )
+            if search_filter_rules is not None:
+                self._write_search_filter_payload(
+                    self._search_filter_payload_from_rules(search_filter_rules)
+                )
             self._write_env(self._to_env_map(next_cfg))
+            next_cfg.search_filter_rules = self.search_filter_rules_json()
             return next_cfg
 
     @staticmethod
@@ -600,6 +849,8 @@ class AppConfigStore:
             "storage_providers": cfg.storage_providers,
             "resource_filter_enabled": cfg.resource_filter_enabled,
             "resource_filter_rules": cfg.resource_filter_rules,
+            "search_filter_enabled": cfg.search_filter_enabled,
+            "search_filter_rules": cfg.search_filter_rules,
             "resource_cleanup_local_roots": cfg.resource_cleanup_local_roots,
             "quark_cookie_masked": _mask_secret(cfg.quark_cookie),
             "tianyi_username": cfg.tianyi_username,
@@ -659,6 +910,8 @@ def build_provider_settings(_runtime: Settings, app_cfg: AppConfig) -> ProviderS
         storage_providers=app_cfg.storage_providers,
         resource_filter_enabled=app_cfg.resource_filter_enabled,
         resource_filter_rules=app_cfg.resource_filter_rules,
+        search_filter_enabled=app_cfg.search_filter_enabled,
+        search_filter_rules=app_cfg.search_filter_rules,
         resource_cleanup_local_roots=app_cfg.resource_cleanup_local_roots,
         quark_cookie=app_cfg.quark_cookie,
         tianyi_username=app_cfg.tianyi_username,

@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from app.core.config import get_settings
 from app.core.deps import get_app_config_store
@@ -15,7 +16,7 @@ def test_webui_opens_on_search_page_without_cached_shell() -> None:
     assert response.headers["cache-control"] == "no-store"
     assert '<section data-page="recommend" class="page" hidden>' in response.text
     assert '<section data-page="search" class="page">' in response.text
-    assert '/assets/app.js?v=20260621-04' in response.text
+    assert '/assets/app.js?v=' in response.text
 
 
 def _reset_runtime_config_db() -> None:
@@ -188,13 +189,65 @@ def test_settings_masked_and_update(monkeypatch, tmp_path) -> None:
     assert len(test.json()["results"]) == 7
 
 
+def test_search_filter_rules_are_saved_in_separate_file(monkeypatch, tmp_path) -> None:
+    _prepare_config_db(monkeypatch, tmp_path)
+    _login()
+
+    rules = json.dumps(
+        [
+            {
+                "id": "search-rule-default-1",
+                "name": "默认搜索规则 1",
+                "enabled": True,
+                "match_mode": "keyword",
+                "pattern": "推特",
+            },
+            {
+                "id": "search-rule-custom-1",
+                "name": "自定义搜索规则 1",
+                "enabled": True,
+                "match_mode": "keyword",
+                "pattern": "自定义关键词",
+            },
+        ],
+        ensure_ascii=False,
+    )
+
+    response = client.put(
+        "/settings",
+        json={
+            "search_filter_enabled": True,
+            "search_filter_rules": rules,
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "自定义关键词" in data["search_filter_rules"]
+    assert "推特" in data["search_filter_default_rules"]
+
+    rules_path = tmp_path / "config" / "search_filter_rules.json"
+    assert rules_path.exists()
+    payload = json.loads(rules_path.read_text(encoding="utf-8"))
+    assert payload["default_keywords"]
+    assert payload["custom_keywords"] == ["自定义关键词"]
+
+    env_text = (tmp_path / "config" / ".env").read_text(encoding="utf-8")
+    assert "SEARCH_FILTER_RULES=" not in env_text
+
+
 def test_transfer_commit_skips_filtered_share_files(monkeypatch, tmp_path) -> None:
     _prepare_config_db(monkeypatch, tmp_path)
     _login()
 
     async def fake_tree(self, source_uri, selected_ids=None):  # type: ignore[no-untyped-def]
         return [
-            {"id": "f1", "name": "正片.mkv", "path": "/正片.mkv", "size": 100 * 1024 * 1024, "is_dir": False},
+            {
+                "id": "f1",
+                "name": "正片.mkv",
+                "path": "/正片.mkv",
+                "size": 100 * 1024 * 1024,
+                "is_dir": False,
+            },
             {
                 "id": "f2",
                 "name": "电影港 地址发布页 www.dygang.me 收藏不迷路.txt",
@@ -244,7 +297,10 @@ def test_cleanup_preview_and_execute_local(monkeypatch, tmp_path) -> None:
         json={
             "resource_cleanup_local_roots": str(root),
             "resource_filter_enabled": True,
-            "resource_filter_rules": '[{"id":"txt","name":"文本","enabled":true,"glob":"*.txt","min_size_bytes":null,"max_size_bytes":null,"applies_to":"both"}]',
+            "resource_filter_rules": (
+                '[{"id":"txt","name":"文本","enabled":true,"glob":"*.txt",'
+                '"min_size_bytes":null,"max_size_bytes":null,"applies_to":"both"}]'
+            ),
         },
     )
     assert update.status_code == 200
