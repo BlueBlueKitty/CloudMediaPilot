@@ -34,7 +34,13 @@ def get_search_service() -> SearchService:
 def get_task_service() -> TaskService:
     settings = _provider_settings()
     filter_service = ResourceFilterService(settings)
-    return TaskService(C115Adapter(settings), QuarkAdapter(settings), settings, filter_service)
+    return TaskService(
+        C115Adapter(settings),
+        QuarkAdapter(settings),
+        ProwlarrAdapter(settings),
+        settings,
+        filter_service,
+    )
 
 
 def get_cleanup_service() -> CleanupService:

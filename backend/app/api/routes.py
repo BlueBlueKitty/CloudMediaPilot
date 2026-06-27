@@ -49,6 +49,7 @@ from app.schemas.models import (
     ReadyResponse,
     SearchRequest,
     SearchResponse,
+    SearchProgressResponse,
     SettingsResponse,
     SettingsUpdateRequest,
     TaskListResponse,
@@ -61,8 +62,10 @@ from app.services.cleanup_service import CleanupService
 from app.services.log_service import handler as memory_log_handler
 from app.services.provider_status_service import ProviderStatusService
 from app.services.search_service import SearchService
+from app.services.search_progress_service import store as search_progress_store
 from app.services.task_service import TaskService
 from app.utils.ids import new_request_id
+from app.utils.media import infer_cloud_type
 
 router = APIRouter()
 
@@ -467,12 +470,24 @@ async def search(
     svc: SearchService = Depends(get_search_service),
     _: str = Depends(_require_auth),
 ) -> SearchResponse:
+    request_id = payload.request_id or new_request_id()
     return await svc.search(
-        new_request_id(),
+        request_id,
         payload.keyword,
         payload.limit,
         payload.tmdb_context,
     )
+
+
+@router.get("/search/progress/{request_id}", response_model=SearchProgressResponse)
+async def search_progress(
+    request_id: str,
+    _: str = Depends(_require_auth),
+) -> SearchProgressResponse:
+    progress = search_progress_store.get(request_id)
+    if not progress:
+        return SearchProgressResponse(request_id=request_id, keyword="", finished=True, providers=[])
+    return progress
 
 
 @router.post("/tasks/offline", response_model=OfflineTaskResponse)
@@ -483,7 +498,12 @@ async def create_offline_task(
     _: str = Depends(_require_auth),
 ) -> OfflineTaskResponse:
     target = payload.target_dir_id or store.get().c115_target_dir_id
-    return await svc.create_offline_task(new_request_id(), payload.source_uri, target)
+    return await svc.create_offline_task(
+        new_request_id(),
+        payload.source_uri,
+        target,
+        payload.cloud_type or infer_cloud_type(payload.source_uri),
+    )
 
 
 @router.post("/tasks/offline/check", response_model=OfflineTaskCheckResponse)
@@ -737,9 +757,13 @@ async def update_app_settings(
         pansou_search_method=payload.pansou_search_method,
         pansou_cloud_types=payload.pansou_cloud_types,
         pansou_source=payload.pansou_source,
+        pansou_search_limit_enabled=payload.pansou_search_limit_enabled,
+        pansou_search_limit=payload.pansou_search_limit,
         enable_tmdb=payload.enable_tmdb,
         enable_prowlarr=payload.enable_prowlarr,
         enable_pansou=payload.enable_pansou,
+        prowlarr_search_limit_enabled=payload.prowlarr_search_limit_enabled,
+        prowlarr_search_limit=payload.prowlarr_search_limit,
         c115_base_url=payload.c115_base_url,
         c115_cookie=payload.c115_cookie,
         c115_allowed_actions=payload.c115_allowed_actions,

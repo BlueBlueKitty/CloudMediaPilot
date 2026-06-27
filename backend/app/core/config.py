@@ -42,10 +42,14 @@ class ProviderSettings:
     pansou_search_method: str
     pansou_cloud_types: str
     pansou_source: str
+    pansou_search_limit_enabled: bool
+    pansou_search_limit: int
     prowlarr_base_url: str
     prowlarr_api_key: str
     prowlarr_use_proxy: bool
     enable_prowlarr: bool
+    prowlarr_search_limit_enabled: bool
+    prowlarr_search_limit: int
     tmdb_base_url: str
     tmdb_api_key: str
     enable_tmdb: bool

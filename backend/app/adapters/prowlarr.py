@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from datetime import datetime, timezone
 from hashlib import sha1
 
@@ -112,10 +111,11 @@ class ProwlarrAdapter:
             return f"indexer-{indexer_id}"
         return None
 
-    async def search(self, keyword: str, limit: int) -> list[SearchResultItem]:
+    async def search(self, keyword: str, limit: int | None) -> list[SearchResultItem]:
         if self.settings.use_mock:
             rows = []
-            for idx in range(min(limit, 20)):
+            mock_limit = min(limit, 20) if limit is not None else 20
+            for idx in range(mock_limit):
                 magnet = f"magnet:?xt=urn:btih:MOCK{idx:04d}"
                 rows.append(
                     SearchResultItem(
@@ -143,7 +143,9 @@ class ProwlarrAdapter:
 
         headers = {"X-Api-Key": self.settings.prowlarr_api_key}
         url = f"{self.settings.prowlarr_base_url}/api/v1/search"
-        params: dict[str, str | int] = {"query": keyword, "limit": limit, "type": "search"}
+        params: dict[str, str | int] = {"query": keyword, "type": "search"}
+        if limit is not None:
+            params["limit"] = limit
         try:
             async with httpx.AsyncClient(
                 timeout=self.settings.request_timeout_seconds,
@@ -158,7 +160,8 @@ class ProwlarrAdapter:
                     rows = payload.get("results") or payload.get("data") or []
                 else:
                     rows = []
-                rows = rows[:limit]
+                if limit is not None:
+                    rows = rows[:limit]
                 out: list[SearchResultItem] = []
                 for idx, row in enumerate(rows):
                     if not isinstance(row, dict):
@@ -177,11 +180,6 @@ class ProwlarrAdapter:
                                 magnet = value
                                 break
                     magnet = str(magnet or "").strip() or None
-                    magnet_candidate = magnet or download_url
-                    if magnet_candidate and not magnet_candidate.startswith("magnet:"):
-                        resolved = await self._resolve_magnet(client, magnet_candidate)
-                        if resolved:
-                            magnet = resolved
 
                     link = str(
                         magnet
@@ -211,6 +209,20 @@ class ProwlarrAdapter:
                 return out
         except Exception as exc:  # noqa: BLE001
             raise ProviderError("PROWLARR_ERROR", f"Prowlarr search failed: {exc}", 502) from exc
+
+    async def resolve_download_url(self, source_uri: str) -> str | None:
+        if not source_uri or source_uri.startswith("magnet:"):
+            return source_uri or None
+        if "/download" not in source_uri:
+            return None
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.settings.request_timeout_seconds,
+                proxy=self._proxy(),
+            ) as client:
+                return await self._resolve_magnet(client, source_uri)
+        except Exception:  # noqa: BLE001
+            return None
 
     async def check(self) -> tuple[bool, str]:
         if self.settings.use_mock:

@@ -29,7 +29,8 @@ class TMDBSearchContext(BaseModel):
 
 class SearchRequest(BaseModel):
     keyword: str = Field(min_length=1, max_length=200)
-    limit: int = Field(default=50, ge=1, le=500)
+    request_id: str | None = None
+    limit: int | None = Field(default=None, ge=1, le=500)
     tmdb_context: TMDBSearchContext | None = None
 
 
@@ -74,6 +75,20 @@ class SearchResponse(BaseModel):
     results: list[SearchResultItem]
 
 
+class SearchProgressProvider(BaseModel):
+    provider: Literal["pansou", "prowlarr"]
+    status: Literal["queued", "running", "succeeded", "failed"] = "queued"
+    count: int | None = None
+    message: str | None = None
+
+
+class SearchProgressResponse(BaseModel):
+    request_id: str
+    keyword: str
+    finished: bool = False
+    providers: list[SearchProgressProvider] = Field(default_factory=list)
+
+
 class TMDBSearchItem(BaseModel):
     tmdb_id: int
     title: str
@@ -100,6 +115,7 @@ class TMDBSearchResponse(BaseModel):
 class OfflineTaskRequest(BaseModel):
     source_uri: str = Field(min_length=1)
     target_dir_id: str | None = None
+    cloud_type: str | None = None
 
 
 class OfflineTaskCheckRequest(BaseModel):
@@ -224,12 +240,16 @@ class SettingsResponse(BaseModel):
     pansou_search_method: str
     pansou_cloud_types: str
     pansou_source: str
+    pansou_search_limit_enabled: bool
+    pansou_search_limit: int
     pansou_password_masked: str
     pansou_password: str = ""
     has_pansou_password: bool
     enable_tmdb: bool
     enable_prowlarr: bool
     enable_pansou: bool
+    prowlarr_search_limit_enabled: bool
+    prowlarr_search_limit: int
 
     c115_base_url: str
     c115_cookie_masked: str
@@ -282,9 +302,13 @@ class SettingsUpdateRequest(BaseModel):
     pansou_search_method: str | None = None
     pansou_cloud_types: str | None = None
     pansou_source: str | None = None
+    pansou_search_limit_enabled: bool | None = None
+    pansou_search_limit: int | None = Field(default=None, ge=1, le=5000)
     enable_tmdb: bool | None = None
     enable_prowlarr: bool | None = None
     enable_pansou: bool | None = None
+    prowlarr_search_limit_enabled: bool | None = None
+    prowlarr_search_limit: int | None = Field(default=None, ge=1, le=5000)
 
     c115_base_url: str | None = None
     c115_cookie: str | None = None

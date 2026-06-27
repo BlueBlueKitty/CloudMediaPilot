@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from app.adapters.c115 import C115Adapter
+from app.adapters.prowlarr import ProwlarrAdapter
 from app.adapters.quark import QuarkAdapter
 from app.core.config import ProviderSettings
 from app.core.errors import NotFoundError, ValidationError
@@ -28,11 +29,13 @@ class TaskService:
         self,
         c115: C115Adapter,
         quark: QuarkAdapter,
+        prowlarr: ProwlarrAdapter,
         settings: ProviderSettings,
         filter_service: ResourceFilterService,
     ) -> None:
         self.c115 = c115
         self.quark = quark
+        self.prowlarr = prowlarr
         self.settings = settings
         self.filter_service = filter_service
 
@@ -185,7 +188,12 @@ class TaskService:
         )
         try:
             if cloud_type in {"magnet", "ed2k"}:
-                task = await self.create_offline_task(request_id, source_uri, target_dir_id)
+                task = await self.create_offline_task(
+                    request_id,
+                    source_uri,
+                    target_dir_id,
+                    cloud_type,
+                )
                 logger.info("transfer_succeeded provider=%s task_id=%s", cloud_type, task.task_id)
                 return TransferCommitResponse(request_id=request_id, task_id=task.task_id, provider=cloud_type, kept_count=1)
             if cloud_type == "115":
@@ -250,9 +258,14 @@ class TaskService:
         return kept, sorted(skipped.items(), key=lambda item: (-item[1], item[0]))
 
     async def create_offline_task(
-        self, request_id: str, source_uri: str, target_dir_id: str
+        self,
+        request_id: str,
+        source_uri: str,
+        target_dir_id: str,
+        preferred_cloud_type: str | None = None,
     ) -> OfflineTaskResponse:
-        cloud_type = infer_cloud_type(source_uri)
+        source_uri = await self._normalize_offline_source(source_uri, preferred_cloud_type)
+        cloud_type = (preferred_cloud_type or "").strip().lower() or infer_cloud_type(source_uri)
         if not self._supports_provider(cloud_type):
             raise ValidationError("STORAGE_NOT_SUPPORTED", "无法识别链接对应网盘类型", 400)
         self._ensure_configured(cloud_type)
@@ -287,6 +300,19 @@ class TaskService:
             existing_task=False,
             status=rec.status,
         )
+
+    async def _normalize_offline_source(
+        self, source_uri: str, preferred_cloud_type: str | None = None
+    ) -> str:
+        cloud_type = (preferred_cloud_type or "").strip().lower()
+        if cloud_type != "magnet":
+            return source_uri
+        if source_uri.startswith("magnet:"):
+            return source_uri
+        resolved = await self.prowlarr.resolve_download_url(source_uri)
+        if resolved and resolved.startswith("magnet:"):
+            return resolved
+        raise ValidationError("PROWLARR_MAGNET_RESOLVE_FAILED", "Prowlarr 下载链接解析磁力失败", 502)
 
     async def get_task(self, request_id: str, task_id: str) -> TaskStatusResponse:
         rec = store.get(task_id)

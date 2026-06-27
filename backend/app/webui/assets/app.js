@@ -1040,11 +1040,20 @@ async function doResourceSearch(keyword, buttonEl) {
   const text = keyword.trim();
   if (!text) return;
   await runWithButtonLoading(buttonEl, async () => {
-    setStatus("正在搜索资源...");
-    const data = await api("/search", {
-      method: "POST",
-      body: JSON.stringify({ keyword: text, limit: 500 }),
-    });
+    setStatus(buildSearchProgressMessage());
+    const requestId = `search-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const stopRef = { done: false };
+    const progressTask = pollSearchProgress(requestId, stopRef);
+    let data;
+    try {
+      data = await api("/search", {
+        method: "POST",
+        body: JSON.stringify({ request_id: requestId, keyword: text }),
+      });
+    } finally {
+      stopRef.done = true;
+      await progressTask.catch(() => {});
+    }
     state.resources = data.results || [];
     state.selectedResultIds.clear();
     applyFilters();
@@ -1396,6 +1405,54 @@ function combineProxyUrl() {
   return addr ? scheme + addr : "";
 }
 
+function syncSearchLimitControls() {
+  const pansouEnabled = !!document.getElementById("pansouSearchLimitEnabled")?.checked;
+  const prowlarrEnabled = !!document.getElementById("prowlarrSearchLimitEnabled")?.checked;
+  document.getElementById("pansouSearchLimit").disabled = !pansouEnabled;
+  document.getElementById("prowlarrSearchLimit").disabled = !prowlarrEnabled;
+}
+
+function buildSearchProgressMessage() {
+  const providers = [];
+  if (state.settings.enable_pansou !== false) {
+    providers.push("PanSou 搜索中");
+  }
+  if (state.settings.enable_prowlarr !== false) {
+    providers.push("Prowlarr 搜索中");
+  }
+  if (!providers.length) {
+    providers.push("PanSou 搜索中", "Prowlarr 搜索中");
+  }
+  return `搜索进度：${providers.join(" / ")}`;
+}
+
+function formatSearchProgress(data) {
+  const providers = Array.isArray(data?.providers) ? data.providers : [];
+  if (!providers.length) return "正在搜索资源...";
+  const parts = providers.map((item) => {
+    const name = item.provider === "pansou" ? "PanSou" : "Prowlarr";
+    if (item.status === "succeeded") return `${name} 完成${item.count != null ? `(${item.count})` : ""}`;
+    if (item.status === "failed") return `${name} 失败`;
+    if (item.status === "running") return `${name} 搜索中`;
+    return `${name} 排队中`;
+  });
+  return `搜索进度：${parts.join(" / ")}`;
+}
+
+async function pollSearchProgress(requestId, stopRef) {
+  while (!stopRef.done) {
+    try {
+      const progress = await api(`/search/progress/${encodeURIComponent(requestId)}`);
+      if (stopRef.done) return;
+      setStatus(formatSearchProgress(progress));
+      if (progress.finished) return;
+    } catch {
+      if (stopRef.done) return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  }
+}
+
 async function loadSettings() {
   const data = await api("/settings");
   state.settings = data;
@@ -1424,6 +1481,8 @@ async function loadSettings() {
   document.getElementById("pansouUseProxy").checked = !!data.pansou_use_proxy;
   document.getElementById("pansouEnableAuth").checked = !!data.pansou_enable_auth;
   document.getElementById("pansouUsername").value = data.pansou_username || "";
+  document.getElementById("pansouSearchLimitEnabled").checked = data.pansou_search_limit_enabled !== false;
+  document.getElementById("pansouSearchLimit").value = data.pansou_search_limit || 500;
   setSecretInput("pansouPassword", data.pansou_password || data.pansou_password_masked || "");
   document.getElementById("pansouSource").value = data.pansou_source || "all";
   state.pansouCloudTypes = (data.pansou_cloud_types || "")
@@ -1436,7 +1495,10 @@ async function loadSettings() {
   document.getElementById("enableProwlarr").checked = !!data.enable_prowlarr;
   document.getElementById("prowlarrBaseUrl").value = data.prowlarr_base_url || "";
   document.getElementById("prowlarrUseProxy").checked = !!data.prowlarr_use_proxy;
+  document.getElementById("prowlarrSearchLimitEnabled").checked = data.prowlarr_search_limit_enabled !== false;
+  document.getElementById("prowlarrSearchLimit").value = data.prowlarr_search_limit || 100;
   setSecretInput("prowlarrApiKey", data.prowlarr_api_key || data.prowlarr_api_key_masked || "");
+  syncSearchLimitControls();
 
   document.getElementById("c115BaseUrl").value = data.c115_base_url || "";
   setSecretInput("c115Cookie", data.c115_cookie || data.c115_cookie_masked || "");
@@ -1485,6 +1547,8 @@ async function saveSettings(event) {
     pansou_search_method: document.getElementById("pansouSearchMethod").value,
     pansou_cloud_types: document.getElementById("pansouCloudTypes").value.trim(),
     pansou_source: document.getElementById("pansouSource").value,
+    pansou_search_limit_enabled: document.getElementById("pansouSearchLimitEnabled").checked,
+    pansou_search_limit: Math.max(1, Math.min(5000, Number(document.getElementById("pansouSearchLimit").value) || 500)),
     pansou_use_proxy: document.getElementById("pansouUseProxy").checked,
     pansou_enable_auth: document.getElementById("pansouEnableAuth").checked,
     pansou_username: document.getElementById("pansouUsername").value.trim(),
@@ -1492,6 +1556,8 @@ async function saveSettings(event) {
     enable_prowlarr: document.getElementById("enableProwlarr").checked,
     prowlarr_base_url: document.getElementById("prowlarrBaseUrl").value.trim(),
     prowlarr_use_proxy: document.getElementById("prowlarrUseProxy").checked,
+    prowlarr_search_limit_enabled: document.getElementById("prowlarrSearchLimitEnabled").checked,
+    prowlarr_search_limit: Math.max(1, Math.min(5000, Number(document.getElementById("prowlarrSearchLimit").value) || 100)),
 
     c115_base_url: document.getElementById("c115BaseUrl").value.trim(),
     storage_providers: state.settings.storage_providers || "115,quark,tianyi,123",
@@ -2665,6 +2731,8 @@ function bindEvents() {
   };
 
   document.getElementById("loginForm").onsubmit = doLogin;
+  document.getElementById("pansouSearchLimitEnabled").onchange = syncSearchLimitControls;
+  document.getElementById("prowlarrSearchLimitEnabled").onchange = syncSearchLimitControls;
   const checkReleaseUpdateBtn = document.getElementById("checkReleaseUpdateBtn");
   if (checkReleaseUpdateBtn) checkReleaseUpdateBtn.onclick = checkReleaseUpdate;
 }

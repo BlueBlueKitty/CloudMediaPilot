@@ -12,7 +12,9 @@ from app.adapters.prowlarr import ProwlarrAdapter
 from app.adapters.tmdb import TMDBAdapter
 from app.core.config import ProviderSettings
 from app.schemas.models import SearchResultItem
+from app.services.resource_filter_service import ResourceFilterService
 from app.services.search_service import SearchService
+from app.services.task_service import TaskService
 
 
 def _settings() -> ProviderSettings:
@@ -27,10 +29,14 @@ def _settings() -> ProviderSettings:
         pansou_search_method="POST",
         pansou_cloud_types="",
         pansou_source="all",
+        pansou_search_limit_enabled=True,
+        pansou_search_limit=500,
         prowlarr_base_url="http://localhost:9696",
         prowlarr_api_key="key",
         prowlarr_use_proxy=False,
         enable_prowlarr=True,
+        prowlarr_search_limit_enabled=True,
+        prowlarr_search_limit=100,
         tmdb_base_url="https://api.themoviedb.org/3",
         tmdb_api_key="key",
         enable_tmdb=True,
@@ -73,6 +79,11 @@ class _Resp:
 
     def json(self) -> object:
         return self._payload
+
+
+class _FakeTMDB:
+    async def enrich(self, _title: str) -> dict[str, object]:  # type: ignore[override]
+        return {}
 
 
 @pytest.mark.asyncio
@@ -191,7 +202,7 @@ async def test_prowlarr_parses_dict_results(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_prowlarr_resolves_magnet_from_download_url(
+async def test_prowlarr_resolve_download_url_from_download_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _Client:
@@ -202,19 +213,6 @@ async def test_prowlarr_resolves_magnet_from_download_url(
             return None
 
         async def get(self, url, params=None, headers=None, follow_redirects=False):  # type: ignore[no-untyped-def]
-            if "api/v1/search" in url:
-                return _Resp(
-                    {
-                        "results": [
-                            {
-                                "guid": "g1",
-                                "title": "Spider-Man",
-                                "downloadUrl": "http://localhost:9696/15/download?x=1",
-                                "indexer": "0Magnet",
-                            }
-                        ]
-                    }
-                )
             if "download?x=1" in url:
                 resp = types.SimpleNamespace(
                     status_code=301,
@@ -226,10 +224,10 @@ async def test_prowlarr_resolves_magnet_from_download_url(
             raise AssertionError(f"unexpected url {url}")
 
     monkeypatch.setattr("app.adapters.prowlarr.httpx.AsyncClient", lambda **kwargs: _Client())
-    out = await ProwlarrAdapter(_settings()).search("spider", 10)
-    assert len(out) == 1
-    assert out[0].magnet == "magnet:?xt=urn:btih:ABC123"
-    assert out[0].link == "magnet:?xt=urn:btih:ABC123"
+    resolved = await ProwlarrAdapter(_settings()).resolve_download_url(
+        "http://localhost:9696/15/download?x=1"
+    )
+    assert resolved == "magnet:?xt=urn:btih:ABC123"
 
 
 @pytest.mark.asyncio
@@ -450,6 +448,155 @@ def test_dedupe_falls_back_to_source_id_when_link_missing() -> None:
     ]
     out = SearchService._dedupe(rows)
     assert len(out) == 2
+
+
+@pytest.mark.asyncio
+async def test_search_service_caps_prowlarr_limit() -> None:
+    captured: dict[str, tuple[str, int]] = {}
+    settings = _settings()
+    settings.pansou_search_limit = 321
+    settings.prowlarr_search_limit = 45
+
+    class _PanSou:
+        def __init__(self, settings: ProviderSettings) -> None:
+            self.settings = settings
+
+        async def search(self, keyword: str, limit: int) -> list[SearchResultItem]:
+            captured["pansou"] = (keyword, limit)
+            return []
+
+    class _Prowlarr:
+        def __init__(self, settings: ProviderSettings) -> None:
+            self.settings = settings
+
+        async def search(self, keyword: str, limit: int) -> list[SearchResultItem]:
+            captured["prowlarr"] = (keyword, limit)
+            return []
+
+    svc = SearchService(_PanSou(settings), _Prowlarr(settings), _FakeTMDB())  # type: ignore[arg-type]
+    out = await svc.search("req-1", "蜘蛛侠", 20)
+
+    assert out.total == 0
+    assert captured["pansou"] == ("蜘蛛侠", 321)
+    assert captured["prowlarr"] == ("蜘蛛侠", 45)
+
+
+@pytest.mark.asyncio
+async def test_search_service_omits_provider_limit_when_search_caps_disabled() -> None:
+    captured: dict[str, tuple[str, int | None]] = {}
+    settings = _settings()
+    settings.pansou_search_limit_enabled = False
+    settings.prowlarr_search_limit_enabled = False
+
+    class _PanSou:
+        def __init__(self, settings: ProviderSettings) -> None:
+            self.settings = settings
+
+        async def search(self, keyword: str, limit: int | None) -> list[SearchResultItem]:
+            captured["pansou"] = (keyword, limit)
+            return []
+
+    class _Prowlarr:
+        def __init__(self, settings: ProviderSettings) -> None:
+            self.settings = settings
+
+        async def search(self, keyword: str, limit: int | None) -> list[SearchResultItem]:
+            captured["prowlarr"] = (keyword, limit)
+            return []
+
+    class _TMDBMustNotRun:
+        async def enrich(self, _title: str) -> dict[str, object]:
+            raise AssertionError("tmdb enrich should not run after search")
+
+    svc = SearchService(_PanSou(settings), _Prowlarr(settings), _TMDBMustNotRun())  # type: ignore[arg-type]
+    out = await svc.search("req-2", "蜘蛛侠", 77)
+
+    assert out.total == 0
+    assert captured["pansou"] == ("蜘蛛侠", None)
+    assert captured["prowlarr"] == ("蜘蛛侠", None)
+
+
+@pytest.mark.asyncio
+async def test_task_service_resolves_prowlarr_download_url_on_offline_create() -> None:
+    settings = _settings()
+    settings.c115_cookie = "cookie"
+    captured: dict[str, str] = {}
+
+    class _C115:
+        def make_idempotency_key(self, source_uri: str, target_dir_id: str) -> str:
+            captured["idem_source"] = source_uri
+            return f"{source_uri}|{target_dir_id}"
+
+        async def create_offline_task(self, source_uri: str, target_dir_id: str) -> str:
+            captured["offline_source"] = source_uri
+            captured["offline_target"] = target_dir_id
+            return "task-123"
+
+    class _Quark:
+        async def save_shared_file(self, source_uri: str, target_dir_id: str) -> str:
+            raise AssertionError("should not call quark")
+
+    class _Prowlarr:
+        async def resolve_download_url(self, source_uri: str) -> str | None:
+            captured["resolve_source"] = source_uri
+            return "magnet:?xt=urn:btih:ABC123"
+
+    svc = TaskService(
+        _C115(),  # type: ignore[arg-type]
+        _Quark(),  # type: ignore[arg-type]
+        _Prowlarr(),  # type: ignore[arg-type]
+        settings,
+        ResourceFilterService(settings),
+    )
+    out = await svc.create_offline_task(
+        "req-1",
+        "http://localhost:9696/15/download?x=1",
+        "0",
+        "magnet",
+    )
+
+    assert out.task_id == "task-123"
+    assert captured["resolve_source"] == "http://localhost:9696/15/download?x=1"
+    assert captured["idem_source"] == "magnet:?xt=urn:btih:ABC123"
+    assert captured["offline_source"] == "magnet:?xt=urn:btih:ABC123"
+
+
+@pytest.mark.asyncio
+async def test_task_service_rejects_unresolved_prowlarr_download_url() -> None:
+    settings = _settings()
+    settings.c115_cookie = "cookie"
+
+    class _C115:
+        def make_idempotency_key(self, source_uri: str, target_dir_id: str) -> str:
+            return f"{source_uri}|{target_dir_id}"
+
+        async def create_offline_task(self, source_uri: str, target_dir_id: str) -> str:
+            raise AssertionError("should not reach 115")
+
+    class _Quark:
+        async def save_shared_file(self, source_uri: str, target_dir_id: str) -> str:
+            raise AssertionError("should not call quark")
+
+    class _Prowlarr:
+        async def resolve_download_url(self, source_uri: str) -> str | None:
+            return None
+
+    svc = TaskService(
+        _C115(),  # type: ignore[arg-type]
+        _Quark(),  # type: ignore[arg-type]
+        _Prowlarr(),  # type: ignore[arg-type]
+        settings,
+        ResourceFilterService(settings),
+    )
+
+    with pytest.raises(Exception) as exc:
+        await svc.create_offline_task(
+            "req-1",
+            "http://localhost:9696/15/download?x=1",
+            "0",
+            "magnet",
+        )
+    assert "Prowlarr 下载链接解析磁力失败" in str(exc.value)
 
 
 @pytest.mark.asyncio

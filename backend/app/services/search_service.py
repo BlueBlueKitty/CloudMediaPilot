@@ -7,15 +7,15 @@ import time
 
 from app.adapters.pansou import PanSouAdapter
 from app.adapters.prowlarr import ProwlarrAdapter
-from app.adapters.tmdb import TMDBAdapter
 from app.core.errors import ProviderError
 from app.schemas.models import SearchResponse, SearchResultItem, TMDBSearchContext
+from app.services.search_progress_service import store as search_progress_store
 
 logger = logging.getLogger("resource_search")
 
 
 class SearchService:
-    def __init__(self, pansou: PanSouAdapter, prowlarr: ProwlarrAdapter, tmdb: TMDBAdapter) -> None:
+    def __init__(self, pansou: PanSouAdapter, prowlarr: ProwlarrAdapter, tmdb: object) -> None:
         self.pansou = pansou
         self.prowlarr = prowlarr
         self.tmdb = tmdb
@@ -24,25 +24,45 @@ class SearchService:
         self,
         request_id: str,
         keyword: str,
-        limit: int,
+        limit: int | None,
         tmdb_context: TMDBSearchContext | None = None,
     ) -> SearchResponse:
         started = time.perf_counter()
         partial_success = False
         warnings: list[str] = []
         logger.info("search_started title=%s limit=%s", keyword, limit)
+        active_providers = [
+            provider
+            for provider, enabled in (
+                ("pansou", self.pansou.settings.enable_pansou),
+                ("prowlarr", self.prowlarr.settings.enable_prowlarr),
+            )
+            if enabled
+        ]
+        search_progress_store.start(request_id, keyword, active_providers)
 
-        source_limit = max(limit * 2, 500)
-        pansou_task = asyncio.create_task(self.pansou.search(keyword, source_limit))
-        prowlarr_task = asyncio.create_task(self.prowlarr.search(keyword, source_limit))
+        pansou_limit = (
+            max(1, self.pansou.settings.pansou_search_limit)
+            if self.pansou.settings.pansou_search_limit_enabled
+            else None
+        )
+        prowlarr_limit = (
+            max(1, self.prowlarr.settings.prowlarr_search_limit)
+            if self.prowlarr.settings.prowlarr_search_limit_enabled
+            else None
+        )
+        pansou_task = asyncio.create_task(self.pansou.search(keyword, pansou_limit))
+        prowlarr_task = asyncio.create_task(self.prowlarr.search(keyword, prowlarr_limit))
 
         pansou_results: list[SearchResultItem] = []
         prowlarr_results: list[SearchResultItem] = []
-
         for task_name, task in (("pansou", pansou_task), ("prowlarr", prowlarr_task)):
             try:
                 out = await task
                 logger.info("search_provider_succeeded provider=%s title=%s count=%s", task_name, keyword, len(out))
+                search_progress_store.update_provider(
+                    request_id, task_name, status="succeeded", count=len(out)
+                )
                 if task_name == "pansou":
                     pansou_results = out
                 else:
@@ -51,24 +71,18 @@ class SearchService:
                 partial_success = True
                 warnings.append(f"{task_name}:{exc.message}")
                 logger.error("search_provider_failed provider=%s title=%s error=%s", task_name, keyword, exc.message)
+                search_progress_store.update_provider(
+                    request_id, task_name, status="failed", message=exc.message
+                )
 
         merged = self._dedupe(pansou_results + prowlarr_results)
         if tmdb_context:
             merged = self._precision_rank(merged, tmdb_context)
-        merged = merged[:limit]
-
-        enrich_tasks = [asyncio.create_task(self.tmdb.enrich(r.title)) for r in merged]
-        enrich_results = await asyncio.gather(*enrich_tasks, return_exceptions=True)
-        for row, meta in zip(merged, enrich_results, strict=False):
-            if isinstance(meta, dict):
-                row.tmdb_id = meta.get("tmdb_id")
-                row.tmdb_title = meta.get("tmdb_title")
-                row.tmdb_overview = meta.get("tmdb_overview")
-                row.tmdb_poster = meta.get("tmdb_poster")
-            else:
-                partial_success = True
+        if limit is not None:
+            merged = merged[:limit]
 
         elapsed = int((time.perf_counter() - started) * 1000)
+        search_progress_store.finish(request_id)
         logger.info(
             "search_finished title=%s provider=all total_results=%s took_ms=%s",
             keyword,

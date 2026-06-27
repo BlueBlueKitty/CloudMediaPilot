@@ -29,7 +29,11 @@ _ENV_KEYS_ORDER = [
     "PANSOU_SEARCH_METHOD",
     "PANSOU_CLOUD_TYPES",
     "PANSOU_SOURCE",
+    "PANSOU_SEARCH_LIMIT_ENABLED",
+    "PANSOU_SEARCH_LIMIT",
     "ENABLE_PANSOU",
+    "PROWLARR_SEARCH_LIMIT_ENABLED",
+    "PROWLARR_SEARCH_LIMIT",
     "C115_BASE_URL",
     "C115_COOKIE",
     "C115_ALLOWED_ACTIONS",
@@ -78,7 +82,11 @@ class AppConfig:
     pansou_search_method: str = "POST"
     pansou_cloud_types: str = ""
     pansou_source: str = "all"
+    pansou_search_limit_enabled: bool = True
+    pansou_search_limit: int = 500
     enable_pansou: bool = True
+    prowlarr_search_limit_enabled: bool = True
+    prowlarr_search_limit: int = 100
 
     c115_base_url: str = "https://lixian.115.com"
     c115_cookie: str = ""
@@ -117,6 +125,16 @@ def _to_bool(raw: str | None, default: bool) -> bool:
     if raw is None:
         return default
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _to_int(raw: str | None, default: int, minimum: int, maximum: int) -> int:
+    if raw is None:
+        return default
+    try:
+        value = int(str(raw).strip())
+    except Exception:
+        return default
+    return max(minimum, min(maximum, value))
 
 
 def hash_password(raw: str) -> str:
@@ -181,7 +199,11 @@ class AppConfigStore:
             "PANSOU_SEARCH_METHOD": cfg.pansou_search_method,
             "PANSOU_CLOUD_TYPES": cfg.pansou_cloud_types,
             "PANSOU_SOURCE": cfg.pansou_source,
+            "PANSOU_SEARCH_LIMIT_ENABLED": "true" if cfg.pansou_search_limit_enabled else "false",
+            "PANSOU_SEARCH_LIMIT": str(cfg.pansou_search_limit),
             "ENABLE_PANSOU": "true" if cfg.enable_pansou else "false",
+            "PROWLARR_SEARCH_LIMIT_ENABLED": "true" if cfg.prowlarr_search_limit_enabled else "false",
+            "PROWLARR_SEARCH_LIMIT": str(cfg.prowlarr_search_limit),
             "C115_BASE_URL": cfg.c115_base_url,
             "C115_COOKIE": cfg.c115_cookie,
             "C115_ALLOWED_ACTIONS": cfg.c115_allowed_actions,
@@ -236,7 +258,19 @@ class AppConfigStore:
                 pansou_search_method=env.get("PANSOU_SEARCH_METHOD", base.pansou_search_method),
                 pansou_cloud_types=env.get("PANSOU_CLOUD_TYPES", base.pansou_cloud_types),
                 pansou_source=env.get("PANSOU_SOURCE", base.pansou_source),
+                pansou_search_limit_enabled=_to_bool(
+                    env.get("PANSOU_SEARCH_LIMIT_ENABLED"), base.pansou_search_limit_enabled
+                ),
+                pansou_search_limit=_to_int(
+                    env.get("PANSOU_SEARCH_LIMIT"), base.pansou_search_limit, 1, 5000
+                ),
                 enable_pansou=_to_bool(env.get("ENABLE_PANSOU"), base.enable_pansou),
+                prowlarr_search_limit_enabled=_to_bool(
+                    env.get("PROWLARR_SEARCH_LIMIT_ENABLED"), base.prowlarr_search_limit_enabled
+                ),
+                prowlarr_search_limit=_to_int(
+                    env.get("PROWLARR_SEARCH_LIMIT"), base.prowlarr_search_limit, 1, 5000
+                ),
                 c115_base_url=env.get("C115_BASE_URL", base.c115_base_url),
                 c115_cookie=env.get("C115_COOKIE", base.c115_cookie),
                 c115_allowed_actions=env.get("C115_ALLOWED_ACTIONS", base.c115_allowed_actions),
@@ -308,9 +342,13 @@ class AppConfigStore:
         pansou_search_method: str | None = None,
         pansou_cloud_types: str | None = None,
         pansou_source: str | None = None,
+        pansou_search_limit_enabled: bool | None = None,
+        pansou_search_limit: int | None = None,
         enable_tmdb: bool | None = None,
         enable_prowlarr: bool | None = None,
         enable_pansou: bool | None = None,
+        prowlarr_search_limit_enabled: bool | None = None,
+        prowlarr_search_limit: int | None = None,
         c115_base_url: str | None = None,
         c115_cookie: str | None = None,
         c115_allowed_actions: str | None = None,
@@ -406,8 +444,28 @@ class AppConfigStore:
                 pansou_source=(
                     pansou_source if pansou_source is not None else current.pansou_source
                 ),
+                pansou_search_limit_enabled=(
+                    pansou_search_limit_enabled
+                    if pansou_search_limit_enabled is not None
+                    else current.pansou_search_limit_enabled
+                ),
+                pansou_search_limit=(
+                    max(1, min(5000, int(pansou_search_limit)))
+                    if pansou_search_limit is not None
+                    else current.pansou_search_limit
+                ),
                 enable_pansou=(
                     enable_pansou if enable_pansou is not None else current.enable_pansou
+                ),
+                prowlarr_search_limit_enabled=(
+                    prowlarr_search_limit_enabled
+                    if prowlarr_search_limit_enabled is not None
+                    else current.prowlarr_search_limit_enabled
+                ),
+                prowlarr_search_limit=(
+                    max(1, min(5000, int(prowlarr_search_limit)))
+                    if prowlarr_search_limit is not None
+                    else current.prowlarr_search_limit
                 ),
                 c115_base_url=(
                     c115_base_url if c115_base_url is not None else current.c115_base_url
@@ -524,9 +582,13 @@ class AppConfigStore:
             "pansou_search_method": cfg.pansou_search_method,
             "pansou_cloud_types": cfg.pansou_cloud_types,
             "pansou_source": cfg.pansou_source,
+            "pansou_search_limit_enabled": cfg.pansou_search_limit_enabled,
+            "pansou_search_limit": cfg.pansou_search_limit,
             "enable_tmdb": cfg.enable_tmdb,
             "enable_prowlarr": cfg.enable_prowlarr,
             "enable_pansou": cfg.enable_pansou,
+            "prowlarr_search_limit_enabled": cfg.prowlarr_search_limit_enabled,
+            "prowlarr_search_limit": cfg.prowlarr_search_limit,
             "c115_base_url": cfg.c115_base_url,
             "c115_target_dir_id": cfg.c115_target_dir_id,
             "c115_target_dir_path": cfg.c115_target_dir_path,
@@ -572,10 +634,14 @@ def build_provider_settings(_runtime: Settings, app_cfg: AppConfig) -> ProviderS
         pansou_search_method=app_cfg.pansou_search_method,
         pansou_cloud_types=app_cfg.pansou_cloud_types,
         pansou_source=app_cfg.pansou_source,
+        pansou_search_limit_enabled=app_cfg.pansou_search_limit_enabled,
+        pansou_search_limit=app_cfg.pansou_search_limit,
         prowlarr_base_url=app_cfg.prowlarr_base_url,
         prowlarr_api_key=app_cfg.prowlarr_api_key,
         prowlarr_use_proxy=app_cfg.prowlarr_use_proxy,
         enable_prowlarr=app_cfg.enable_prowlarr,
+        prowlarr_search_limit_enabled=app_cfg.prowlarr_search_limit_enabled,
+        prowlarr_search_limit=app_cfg.prowlarr_search_limit,
         tmdb_base_url=app_cfg.tmdb_base_url,
         tmdb_api_key=app_cfg.tmdb_api_key,
         enable_tmdb=app_cfg.enable_tmdb,

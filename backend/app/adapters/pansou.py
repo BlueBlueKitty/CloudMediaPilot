@@ -241,7 +241,7 @@ class PanSouAdapter:
                 out[str(cloud_type).strip().lower()] = [row for row in rows if isinstance(row, dict)]
         return out
 
-    async def _search_once(self, keyword: str, limit: int) -> list[SearchResultItem]:
+    async def _search_once(self, keyword: str, limit: int | None) -> list[SearchResultItem]:
         endpoint = self.settings.pansou_search_path.strip() or "/api/search"
         method = (self.settings.pansou_search_method or "POST").strip().upper()
         if method not in {"GET", "POST"}:
@@ -303,7 +303,7 @@ class PanSouAdapter:
                             score=7.0,
                         )
                     )
-                    if len(out) >= limit:
+                    if limit is not None and len(out) >= limit:
                         return out
             return out
 
@@ -396,14 +396,15 @@ class PanSouAdapter:
                         score=7.0,
                     )
                 )
-                if len(out) >= limit:
+                if limit is not None and len(out) >= limit:
                     return out
         return out
 
-    async def search(self, keyword: str, limit: int) -> list[SearchResultItem]:
+    async def search(self, keyword: str, limit: int | None) -> list[SearchResultItem]:
         if self.settings.use_mock:
             rows = []
-            for idx in range(min(limit, 20)):
+            mock_limit = min(limit, 20) if limit is not None else 20
+            for idx in range(mock_limit):
                 link = f"https://example.com/pansou/{idx}"
                 rows.append(
                     SearchResultItem(

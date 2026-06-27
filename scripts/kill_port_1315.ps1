@@ -16,19 +16,19 @@ function Get-PortOwningPids([int]$TargetPort) {
 
 function Get-KillCandidates([int[]]$Pids) {
   $all = New-Object System.Collections.Generic.HashSet[int]
-  foreach ($pid in $Pids) {
-    [void]$all.Add([int]$pid)
-    $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $pid" -ErrorAction SilentlyContinue
+  foreach ($targetPid in $Pids) {
+    [void]$all.Add([int]$targetPid)
+    $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $targetPid" -ErrorAction SilentlyContinue
     foreach ($child in $children) {
       [void]$all.Add([int]$child.ProcessId)
     }
     $pythonForks = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-      Where-Object { $_.CommandLine -and $_.CommandLine -match "parent_pid=$pid" }
+      Where-Object { $_.CommandLine -and $_.CommandLine -match "parent_pid=$targetPid" }
     foreach ($child in $pythonForks) {
       [void]$all.Add([int]$child.ProcessId)
     }
   }
-  return $all.ToArray()
+  return @($all)
 }
 
 $remaining = Get-PortOwningPids -TargetPort $Port
