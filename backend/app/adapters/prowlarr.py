@@ -163,6 +163,7 @@ class ProwlarrAdapter:
                 for idx, row in enumerate(rows):
                     if not isinstance(row, dict):
                         continue
+                    download_url = str(row.get("downloadUrl") or "").strip() or None
                     magnet = (
                         row.get("magnetUrl")
                         or row.get("magnetURL")
@@ -176,15 +177,16 @@ class ProwlarrAdapter:
                                 magnet = value
                                 break
                     magnet = str(magnet or "").strip() or None
-                    if magnet and not magnet.startswith("magnet:"):
-                        resolved = await self._resolve_magnet(client, magnet)
+                    magnet_candidate = magnet or download_url
+                    if magnet_candidate and not magnet_candidate.startswith("magnet:"):
+                        resolved = await self._resolve_magnet(client, magnet_candidate)
                         if resolved:
                             magnet = resolved
 
                     link = str(
                         magnet
                         if magnet and magnet.startswith("magnet:")
-                        else row.get("downloadUrl") or row.get("guidUrl") or row.get("infoUrl") or ""
+                        else download_url or row.get("guidUrl") or row.get("infoUrl") or ""
                     )
                     out.append(
                         SearchResultItem(

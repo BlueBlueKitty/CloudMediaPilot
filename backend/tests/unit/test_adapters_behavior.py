@@ -191,6 +191,48 @@ async def test_prowlarr_parses_dict_results(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
+async def test_prowlarr_resolves_magnet_from_download_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Client:
+        async def __aenter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return None
+
+        async def get(self, url, params=None, headers=None, follow_redirects=False):  # type: ignore[no-untyped-def]
+            if "api/v1/search" in url:
+                return _Resp(
+                    {
+                        "results": [
+                            {
+                                "guid": "g1",
+                                "title": "Spider-Man",
+                                "downloadUrl": "http://localhost:9696/15/download?x=1",
+                                "indexer": "0Magnet",
+                            }
+                        ]
+                    }
+                )
+            if "download?x=1" in url:
+                resp = types.SimpleNamespace(
+                    status_code=301,
+                    headers={"location": "magnet:?xt=urn:btih:ABC123"},
+                    content=b"",
+                    text="",
+                )
+                return resp
+            raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setattr("app.adapters.prowlarr.httpx.AsyncClient", lambda **kwargs: _Client())
+    out = await ProwlarrAdapter(_settings()).search("spider", 10)
+    assert len(out) == 1
+    assert out[0].magnet == "magnet:?xt=urn:btih:ABC123"
+    assert out[0].link == "magnet:?xt=urn:btih:ABC123"
+
+
+@pytest.mark.asyncio
 async def test_pansou_parses_wrapped_data_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Client:
         async def __aenter__(self):  # type: ignore[no-untyped-def]
